@@ -6,6 +6,12 @@ Documentation=https://github.com/xeeban/macbook-t1-linux
 After=systemd-udev-settle.service
 Wants=systemd-udev-settle.service
 ConditionPathExists=/sys/bus/usb/devices/1-3
+# The old stock-function-row units run touchbar-rebind, which loads
+# apple-ibridge; appleib_hid_probe() then force-selects USB config 1 and kills
+# the display session. install.sh disables them, but declare it too so a manual
+# `systemctl start touchbar` cannot silently blank the bar.
+Conflicts=touchbar.service touchbar-resume.service
+After=touchbar.service touchbar-resume.service
 
 [Service]
 Type=oneshot

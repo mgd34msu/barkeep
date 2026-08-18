@@ -1,0 +1,18 @@
+[Unit]
+Description=Re-establish the Apple T1 Touch Bar display session after resume
+# The iBridge re-enumerates across suspend, which drops USB config 2 and the
+# panel-enable state. The older stock-row setup had touchbar-resume.service for
+# exactly this reason; this is its display-mode equivalent.
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+# Restarting the display unit re-runs dfr-up.sh (re-enumerate into config 2);
+# the bar unit Requires= it, so restart that too to reattach to the new
+# /dev/dfr0 session and re-light the panel.
+ExecStart=/usr/bin/systemctl restart t1-touchbar-display.service
+ExecStart=/usr/bin/systemctl restart t1-touchbar-bar.service
+TimeoutStartSec=120
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

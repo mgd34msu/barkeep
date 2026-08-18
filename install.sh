@@ -8,9 +8,18 @@ set -u
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIBDIR=/usr/local/lib/t1-touchbar
 CFGDIR=/etc/t1-touchbar
-UNITS=(t1-touchbar-display.service t1-touchbar-bar.service)
+UNITS=(t1-touchbar-display.service t1-touchbar-bar.service t1-touchbar-resume.service)
 MODULES=(t1-ibridge-cfg t1-dfr-probe)
 VERSION=1.0
+
+# Units from the older "make the stock firmware function row work" setup. They
+# run /usr/local/bin/touchbar-rebind, which loads apple-ibridge, whose
+# appleib_hid_probe() force-selects USB config 1 -- dragging the device right
+# back out of display mode. touchbar.service is After=multi-user.target, so it
+# lands AFTER our display unit and silently undoes it: config drops to 1, the
+# panel-enable HID report finds no hidraw, and the bar renders into a dead
+# session. They are mutually exclusive with this package.
+LEGACY=(touchbar.service touchbar-resume.service)
 
 G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'
 info() { echo -e "${G}[*]${N} $*"; }
@@ -140,10 +149,39 @@ EOS
     chmod 755 /usr/local/bin/t1-touchbar
 }
 
+# Disable the legacy stock-row units and remember which ones we touched, so
+# uninstall can put them back exactly as they were.
+disable_legacy() {
+    local u recorded=()
+    for u in "${LEGACY[@]}"; do
+        [ "$(systemctl is-enabled "$u" 2>/dev/null)" = "enabled" ] || continue
+        warn "disabling $u - it re-loads apple-ibridge and forces USB config 1"
+        systemctl disable --now "$u" >/dev/null 2>&1 || true
+        recorded+=("$u")
+    done
+    if [ ${#recorded[@]} -gt 0 ]; then
+        printf '%s\n' "${recorded[@]}" > "$CFGDIR/legacy-disabled"
+        info "recorded in $CFGDIR/legacy-disabled (uninstall re-enables them)"
+    fi
+}
+
+restore_legacy() {
+    local f="$CFGDIR/legacy-disabled" u
+    [ -f "$f" ] || return 0
+    while read -r u; do
+        [ -n "$u" ] || continue
+        [ -f "/etc/systemd/system/$u" ] || continue
+        info "re-enabling $u"
+        systemctl enable "$u" >/dev/null 2>&1 || true
+    done < "$f"
+    rm -f "$f"
+}
+
 install_units() {
     info "installing systemd units"
     for u in "${UNITS[@]}"; do install -m644 "$SRC/systemd/$u" "/etc/systemd/system/$u"; done
     systemctl daemon-reload
+    disable_legacy
     systemctl enable "${UNITS[@]}" >/dev/null
 }
 
@@ -177,6 +215,8 @@ do_uninstall() {
     done
     info "restoring the stock function row"
     [ -x "$LIBDIR/dfr-reset.sh" ] && "$LIBDIR/dfr-reset.sh" || true
+    restore_legacy
+    systemctl daemon-reload
     rm -rf "$LIBDIR" /usr/local/bin/t1-touchbar
     warn "left $CFGDIR alone (your settings); remove it by hand if you want"
     info "done - reboot for a fully clean state"
@@ -200,6 +240,11 @@ do_status() {
     echo "device:"
     echo "  config=$(cat $D/bConfigurationValue 2>/dev/null || echo '?') (2 = display mode)"
     echo "  /dev/dfr0 $([ -e /dev/dfr0 ] && echo present || echo missing)"
+    for u in "${LEGACY[@]}"; do
+        [ "$(systemctl is-enabled "$u" 2>/dev/null)" = "enabled" ] && \
+            warn "$u is ENABLED - it will force USB config 1 and blank the bar."
+    done
+    return 0
 }
 
 case "${1:-install}" in
