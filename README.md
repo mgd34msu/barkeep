@@ -122,8 +122,21 @@ prev-play-next / mute / volume as **vector icons** (font glyph coverage for emoj
 symbols is unreliable - they render as tofu), over a gradient built from the dominant colours
 of `~/.local/state/omarchy/current/background`. `--flow N` drifts the gradient N px/sec.
 
-The wallpaper is **watched live** (2 s poll on the symlink target + mtime, since a theme
-change swaps the link) and the palette re-samples automatically.
+### Colour sources
+
+    --source screen      (default) colours currently ON SCREEN, via grim
+    --source theme       the desktop's own palette (colors.toml) - zero cost, no capture
+    --source wallpaper   the backdrop image
+    --fade 2 --poll 3 --threshold 18
+
+`screen` samples with `grim` at 5%% scale (~0.45 s) straight into memory - **nothing is ever
+written to disk**. A palette-distance threshold stops it re-fading on noise (cursor blink, a
+scrolling line); only a real shift in what is on screen triggers a change. Be aware it is
+capturing your desktop on a timer; `theme` gives a similar effect with no capture at all.
+
+Changes **cross-fade across the whole bar at once** (an eased Pillow blend of the two 1-row
+gradients), not a left-to-right wipe. `theme` and `wallpaper` sources watch mtime/symlink
+target and re-sample automatically.
 
 Getting the palette to look right took two fixes:
 - **Merge near-duplicate colours.** Quantizing alone picks up anti-aliased edge pixels - a

@@ -87,8 +87,13 @@ def wallpaper_palette(path, n=6, merge_dist=60):
     then merge entries that are perceptually close, keeping the most common
     member of each cluster and its total share.
     """
-    import colorsys
     im = Image.open(path).convert("RGB")
+    return _palette_from_image(im, n, merge_dist)
+
+
+def _palette_from_image(im, n=6, merge_dist=60):
+    import colorsys
+    im = im.copy()
     im.thumbnail((200, 200))
     q = im.quantize(colors=n * 2, method=Image.MEDIANCUT).convert("RGB")
     counts = {}
@@ -138,6 +143,97 @@ def gradient_strip(cols, length, hold=0.55):
     return out
 
 
+THEME = None   # resolved in main()
+
+
+def theme_colors_path():
+    return os.path.join(_user_home(), ".local/state/omarchy/current/theme/colors.toml")
+
+
+def theme_palette(path=None, n=6):
+    """Palette straight from the desktop theme - no capture, no cost.
+
+    Uses the accent/ANSI hues the UI actually draws with, ordered by hue.
+    """
+    import colorsys, re
+    path = path or theme_colors_path()
+    vals = {}
+    for line in open(path):
+        m = re.match(r'\s*([a-z_]+)\s*=\s*"(#[0-9a-fA-F]{6})"', line)
+        if m:
+            vals[m.group(1)] = m.group(2)
+    want = ["accent", "blue", "cyan", "green", "yellow", "orange",
+            "red", "magenta", "brown"]
+    cols = []
+    for k in want:
+        v = vals.get(k)
+        if not v:
+            continue
+        c = tuple(int(v[i:i + 2], 16) for i in (1, 3, 5))
+        if all(math.dist(c, o) > 40 for o in cols):
+            cols.append(c)
+    if len(cols) < 2:
+        for k in ("background", "foreground"):
+            if vals.get(k):
+                v = vals[k]
+                cols.append(tuple(int(v[i:i + 2], 16) for i in (1, 3, 5)))
+    cols.sort(key=lambda c: colorsys.rgb_to_hsv(*[v / 255 for v in c])[0])
+    return cols[:n]
+
+
+def theme_stamp(path):
+    try:
+        return (os.path.realpath(path), os.stat(path).st_mtime)
+    except OSError:
+        return None
+
+
+def watch_theme(state, period=2.0):
+    path = theme_colors_path()
+    stamp = theme_stamp(path)
+    while not state["stop"]:
+        time.sleep(period)
+        cur = theme_stamp(path)
+        if cur and cur != stamp:
+            stamp = cur
+            try:
+                set_palette(state, theme_palette(path), "theme")
+            except Exception as e:
+                print("theme reload failed:", e)
+
+
+def _desktop_env():
+    """uid / runtime dir / wayland socket of the logged-in desktop user"""
+    import pwd
+    name = os.environ.get("SUDO_USER") or os.environ.get("DFR_USER")
+    try:
+        pw = pwd.getpwnam(name) if name else pwd.getpwuid(1000)
+    except KeyError:
+        pw = pwd.getpwuid(1000)
+    rt = f"/run/user/{pw.pw_uid}"
+    wd = os.environ.get("WAYLAND_DISPLAY")
+    if not wd and os.path.isdir(rt):
+        socks = sorted(g for g in os.listdir(rt) if g.startswith("wayland-")
+                       and not g.endswith(".lock"))
+        wd = socks[0] if socks else "wayland-1"
+    return pw.pw_name, pw.pw_uid, rt, wd or "wayland-1"
+
+
+def screen_palette(n=6, scale=0.05):
+    """Dominant colours of what is CURRENTLY ON SCREEN (grim, as the user)."""
+    import subprocess, io
+    user, uid, rt, wd = _desktop_env()
+    cmd = ["grim", "-s", str(scale), "-t", "ppm", "-"]
+    if os.geteuid() == 0:
+        cmd = ["sudo", "-n", "-u", user, "env",
+               f"XDG_RUNTIME_DIR={rt}", f"WAYLAND_DISPLAY={wd}"] + cmd
+    r = subprocess.run(cmd, capture_output=True, timeout=8)
+    if r.returncode != 0 or not r.stdout:
+        raise RuntimeError((r.stderr or b"grim failed").decode()[:120])
+    im = Image.open(io.BytesIO(r.stdout)).convert("RGB")
+    return _palette_from_image(im, n)
+
+
 def wallpaper_stamp(path):
     """identity of the CURRENT wallpaper: theme changes swap the symlink target"""
     try:
@@ -147,8 +243,39 @@ def wallpaper_stamp(path):
         return None
 
 
+def strip_row(cols):
+    """gradient as a 1-row RGB image, W wide - the unit we blend and scale"""
+    return Image.frombytes("RGB", (W, 1),
+                           b"".join(bytes(c) for c in gradient_strip(cols, W)))
+
+
+def set_palette(state, cols, why):
+    """cross-fade the WHOLE bar from the current gradient to the new one"""
+    new = strip_row(cols)
+    if state.get("row_to") is not None and new.tobytes() == state["row_to"].tobytes():
+        return
+    state["row_from"] = state.get("row_to") or new
+    state["row_to"] = new
+    state["fade_t0"] = time.time()
+    state["dirty"] = True
+    print(f"{why}: " + "  ".join("#%02x%02x%02x" % c for c in cols))
+
+
+def current_row(state, fade_s):
+    """the 1-row gradient for this instant, mid-fade if a change is in flight"""
+    a, b = state.get("row_from"), state.get("row_to")
+    if a is None:
+        return b
+    t = (time.time() - state.get("fade_t0", 0)) / max(fade_s, 1e-6)
+    if t >= 1.0:
+        state["row_from"] = None
+        return b
+    t = t * t * (3 - 2 * t)                      # ease in/out
+    state["fading"] = True
+    return Image.blend(a, b, t)
+
+
 def watch_wallpaper(path, state, period=2.0):
-    """re-sample the palette whenever the wallpaper changes"""
     stamp = wallpaper_stamp(path)
     while not state["stop"]:
         time.sleep(period)
@@ -156,14 +283,39 @@ def watch_wallpaper(path, state, period=2.0):
         if cur and cur != stamp:
             stamp = cur
             try:
-                cols = wallpaper_palette(path)
+                set_palette(state, wallpaper_palette(path),
+                            "wallpaper -> " + os.path.basename(cur[0]))
             except Exception as e:
                 print("wallpaper reload failed:", e)
-                continue
-            state["strip"] = gradient_strip(cols, W)
-            state["dirty"] = True
-            print("wallpaper changed ->", os.path.basename(cur[0]))
-            print("  " + "  ".join("#%02x%02x%02x" % c for c in cols))
+
+
+def palette_distance(a, b):
+    """rough perceptual gap between two palettes (0 = identical)"""
+    if not a or not b:
+        return 1e9
+    def near(c, pal):
+        return min(math.dist(c, o) for o in pal)
+    return (sum(near(c, b) for c in a) / len(a) +
+            sum(near(c, a) for c in b) / len(b)) / 2
+
+
+def watch_screen(state, period=3.0, threshold=18.0):
+    """Track the colours on screen and cross-fade when they actually shift.
+
+    The threshold stops the bar re-fading on every tiny variation (a blinking
+    cursor, a scrolling line) - only a real change in what is on screen.
+    """
+    last = None
+    while not state["stop"]:
+        try:
+            cols = screen_palette()
+            if last is None or palette_distance(cols, last) > threshold:
+                last = cols
+                set_palette(state, cols, "screen")
+        except Exception as e:
+            print("screen sample failed:", e)
+            time.sleep(10)
+        time.sleep(period)
 
 
 # ---------------------------------------------------------------- drawing
@@ -184,13 +336,14 @@ FG = (255, 255, 255, 255)
 
 def draw_icon(d, kind, cx, cy, font):
     """vector icons - no font coverage worries"""
-    def sun(scale):
+    def sun(scale, dx=0):
         r = 7 * scale
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=FG)
+        x = cx + dx
+        d.ellipse([x - r, cy - r, x + r, cy + r], fill=FG)
         for a in range(0, 360, 45):
             t = math.radians(a)
-            d.line([cx + math.cos(t) * (r + 3), cy + math.sin(t) * (r + 3),
-                    cx + math.cos(t) * (r + 7), cy + math.sin(t) * (r + 7)],
+            d.line([x + math.cos(t) * (r + 3), cy + math.sin(t) * (r + 3),
+                    x + math.cos(t) * (r + 7), cy + math.sin(t) * (r + 7)],
                    fill=FG, width=2)
 
     def tri(ox, flip=False):
@@ -200,12 +353,13 @@ def draw_icon(d, kind, cx, cy, font):
                [(cx + ox - s, cy - s), (cx + ox - s, cy + s), (cx + ox + s, cy)])
         d.polygon(pts, fill=FG)
 
-    def speaker(waves):
-        d.polygon([(cx - 12, cy - 5), (cx - 6, cy - 5), (cx + 1, cy - 12),
-                   (cx + 1, cy + 12), (cx - 6, cy + 5), (cx - 12, cy + 5)], fill=FG)
+    def speaker(waves, dx=0):
+        x = cx + dx
+        d.polygon([(x - 12, cy - 5), (x - 6, cy - 5), (x + 1, cy - 12),
+                   (x + 1, cy + 12), (x - 6, cy + 5), (x - 12, cy + 5)], fill=FG)
         for i in range(waves):
             r = 6 + i * 5
-            d.arc([cx + 1 - r, cy - r, cx + 1 + r, cy + r], -55, 55, fill=FG, width=2)
+            d.arc([x + 1 - r, cy - r, x + 1 + r, cy + r], -55, 55, fill=FG, width=2)
 
     def text(label, size=22):
         f = font
@@ -224,7 +378,9 @@ def draw_icon(d, kind, cx, cy, font):
     if kind == "esc":
         text("esc")
     elif kind in ("bri-", "bri+"):
-        cx -= 8; sun(0.8); cx += 8; plusminus(1 if kind.endswith("+") else -1, 14)
+        # sun spans dx-12..dx+12 (rays); +/- spans ox-6..ox+6 -> ~16px clear
+        sun(0.8, dx=-18)
+        plusminus(1 if kind.endswith("+") else -1, 20)
     elif kind == "grid":
         for r in range(2):
             for c in range(3):
@@ -236,11 +392,11 @@ def draw_icon(d, kind, cx, cy, font):
                 x = cx - 13 + c * 10; y = cy - 13 + r * 10
                 d.ellipse([x, y, x + 6, y + 6], fill=FG)
     elif kind in ("kb-", "kb+"):
-        d.rounded_rectangle([cx - 20, cy - 8, cx - 2, cy + 8], radius=3,
+        d.rounded_rectangle([cx - 30, cy - 8, cx - 10, cy + 8], radius=3,
                             outline=FG, width=2)
         for i in range(3):
-            d.line([cx - 17 + i * 5, cy + 4, cx - 17 + i * 5, cy + 4], fill=FG, width=2)
-        plusminus(1 if kind.endswith("+") else -1, 12)
+            d.line([cx - 26 + i * 6, cy + 4, cx - 26 + i * 6, cy + 4], fill=FG, width=2)
+        plusminus(1 if kind.endswith("+") else -1, 16)
     elif kind == "prev":
         d.rectangle([cx - 12, cy - 9, cx - 9, cy + 9], fill=FG); tri(4, flip=True)
     elif kind == "next":
@@ -253,26 +409,19 @@ def draw_icon(d, kind, cx, cy, font):
         d.line([cx + 6, cy - 8, cx + 16, cy + 8], fill=FG, width=2)
         d.line([cx + 16, cy - 8, cx + 6, cy + 8], fill=FG, width=2)
     elif kind == "vol-":
-        speaker(1); plusminus(-1, 20)
+        speaker(1, dx=-10); plusminus(-1, 22)
     elif kind == "vol+":
-        speaker(2); plusminus(1, 22)
+        speaker(2, dx=-12); plusminus(1, 26)
     else:
         text(kind)
 
 
-def render(strip, offset, pressed, font, _cache={}):
-    """Build the frame without per-pixel Python: make a 1-row image from the
-    gradient bytes and let Pillow scale it to full height in C."""
-    n = len(strip)
-    if "row" not in _cache or _cache.get("n") != n:
-        _cache["row"] = b"".join(bytes(c) for c in strip)
-        _cache["n"] = n
-    rowb = _cache["row"]
-    o = (offset % n) * 3
-    rowb = rowb[o:] + rowb[:o]                      # cheap byte rotation
-    base = Image.frombytes("RGB", (W, 1), rowb).resize((W, H), Image.NEAREST)
-
-    img = base.convert("RGB")
+def render(row, offset, pressed, font):
+    """row: a 1-row RGB image W wide. Rotate it, stretch to full height in C."""
+    rowb = row.tobytes()
+    o = (offset % W) * 3
+    rowb = rowb[o:] + rowb[:o]
+    img = Image.frombytes("RGB", (W, 1), rowb).resize((W, H), Image.NEAREST)
     d = ImageDraw.Draw(img, "RGBA")
     for i, (x0, x1) in enumerate(key_extents()):
         d.rounded_rectangle([x0 + 4, 5, x1 - 4, H - 6], radius=10,
@@ -376,31 +525,60 @@ def touch_loop(state, node):
 def main():
     args = sys.argv[1:]
     wall, no_touch, flow = WALL, False, 0.0
+    source, fade_s = "screen", 2.0
     if "--wallpaper" in args:
-        i = args.index("--wallpaper"); wall = args[i + 1]; del args[i:i + 2]
+        i = args.index("--wallpaper"); wall = args[i + 1]; source = "wallpaper"; del args[i:i + 2]
+    if "--source" in args:
+        i = args.index("--source"); source = args[i + 1]; del args[i:i + 2]
+    if "--fade" in args:
+        i = args.index("--fade"); fade_s = float(args[i + 1]); del args[i:i + 2]
     if "--no-touch" in args:
         no_touch = True; args.remove("--no-touch")
     if "--flow" in args:
         i = args.index("--flow"); flow = float(args[i + 1]); del args[i:i + 2]
+    thresh = 18.0
+    if "--threshold" in args:
+        i = args.index("--threshold"); thresh = float(args[i + 1]); del args[i:i + 2]
+    poll = 3.0
+    if "--poll" in args:
+        i = args.index("--poll"); poll = float(args[i + 1]); del args[i:i + 2]
 
     if not os.path.exists(DEV):
         sys.exit(f"{DEV} missing - run scripts/dfr-up.sh first")
 
-    src = wall if os.path.exists(wall) else None
-    if src:
-        cols = wallpaper_palette(src)
-        print("palette from", src)
-        print("  " + "  ".join("#%02x%02x%02x" % c for c in cols))
+    state = {"pressed": -1, "dirty": True, "stop": False,
+             "row_from": None, "row_to": None, "fade_t0": 0.0}
+
+    def initial(src):
+        if src == "screen":
+            return screen_palette(), "screen"
+        if src == "wallpaper":
+            return wallpaper_palette(wall), "wallpaper " + os.path.basename(
+                os.path.realpath(wall))
+        return theme_palette(), "theme"
+
+    for src in (source, "theme", "wallpaper"):
+        try:
+            cols, why = initial(src)
+            source = src
+            break
+        except Exception as e:
+            print(f"{src} source unavailable: {e}")
     else:
-        cols = [(122, 162, 247), (187, 154, 247), (247, 118, 142), (158, 206, 106)]
-        print("wallpaper not found, using theme-ish default palette")
+        cols, why = [(137, 180, 250), (203, 166, 247), (166, 227, 161)], "builtin"
+    set_palette(state, cols, why)
+    state["row_from"] = None                     # no fade on the very first frame
 
     font = find_font(26)
-    state = {"pressed": -1, "dirty": True, "stop": False,
-             "strip": gradient_strip(cols, W)}
 
-    if src:
-        threading.Thread(target=watch_wallpaper, args=(wall, state),
+    if source == "theme":
+        threading.Thread(target=watch_theme, args=(state,), daemon=True).start()
+    elif source == "wallpaper":
+        threading.Thread(target=watch_wallpaper, args=(wall, state), daemon=True).start()
+    elif source == "screen":
+        print(f"screen tracking: sampling every {poll}s, fade {fade_s}s, "
+              f"threshold {thresh} (in-memory only, nothing written to disk)")
+        threading.Thread(target=watch_screen, args=(state, poll, thresh),
                          daemon=True).start()
 
     node = None if no_touch else find_digitizer()
@@ -410,21 +588,19 @@ def main():
         print("touch: digitizer hidraw not found (need config 2) - display only")
 
     dev = open(DEV, "wb", buffering=0)
-    offset, last_draw = 0, 0.0
-    fps = 30 if flow else 0
+    offset = 0
+    period = 1.0 / 30
     try:
         while True:
-            now = time.time()
-            if state["dirty"] or (flow and now - last_draw >= 1.0 / 30):
-                img = render(state["strip"], offset, state["pressed"], font)
+            state["fading"] = False
+            row = current_row(state, fade_s)
+            if state["dirty"] or state["fading"] or flow:
+                img = render(row, offset, state["pressed"], font)
                 dev.write(to_panel(img)); dev.flush()
                 state["dirty"] = False
-                last_draw = now
             if flow:
                 offset = (offset + max(1, int(flow / 30))) % W
-                time.sleep(1.0 / 30)
-            else:
-                time.sleep(0.02)
+            time.sleep(period)
     except KeyboardInterrupt:
         print("\nstopped")
     finally:
