@@ -88,13 +88,18 @@ for m in apple_ib_tb apple_ib_als apple_ibridge; do rmmod $m 2>/dev/null; done
 rmmod dfr_probe 2>/dev/null; rmmod ibridge_cfg 2>/dev/null
 modprobe ibridge_cfg config=1 || exit 1
 # explicit params so this never depends on module defaults
-modprobe dfr_probe rect_w=2170 bpp=3 fbmode=1 period=1 || exit 1
+# colr/colg/colb=0: the module fills frames from load until the UI takes over,
+# so a non-black default flashes that colour on every start.
+modprobe dfr_probe rect_w=2170 bpp=3 fbmode=1 period=1 colr=0 colg=0 colb=0 || exit 1
 echo 2 > /sys/module/ibridge_cfg/parameters/config
 echo 0 > $D/authorized; sleep 2; echo 1 > $D/authorized; sleep 4
 cfg=$(cat $D/bConfigurationValue 2>/dev/null)
 echo "config=$cfg (want 2)"
 [ "$cfg" = "2" ] || { echo "failed to enter config 2"; exit 1; }
-python3 /usr/local/lib/t1-touchbar/dispon.py && echo "panel on"
+# The panel is deliberately left OFF here. dfr-bar.py turns it on immediately
+# after writing its first real frame, so the bar lights up already showing the
+# UI instead of flashing the module's placeholder fill first.
+echo "display session up (panel lit by the UI)"
 EOS
     cat > "$LIBDIR/dfr-reset.sh" <<'EOS'
 #!/usr/bin/env bash

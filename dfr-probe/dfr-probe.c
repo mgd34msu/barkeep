@@ -39,7 +39,11 @@
 
 static int rect_w = 2170;   module_param(rect_w, int, 0644);  /* full panel width */
 static int bpp    = 3;      module_param(bpp, int, 0644);
-static int colr   = 0xff;   module_param(colr, int, 0644);
+/* Default fill is BLACK: the module starts its frame loop as soon as it loads
+ * (that is what holds the display session open), a second or two before the UI
+ * starts writing real frames. A non-black default flashes that colour on every
+ * start. */
+static int colr   = 0x00;   module_param(colr, int, 0644);
 static int colg   = 0x00;   module_param(colg, int, 0644);
 static int colb   = 0x00;   module_param(colb, int, 0644);
 static uint key   = DFR_KEY_WDSP; module_param(key, uint, 0644);
