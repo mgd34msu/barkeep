@@ -3,8 +3,8 @@
 Target: **MacBookPro13,2** (2016 13" Touch Bar), Apple **T1** iBridge, USB `05ac:8600`.
 Not T2. `tiny-dfr`, `appletbdrm` and `hid-appletb-*` are all T2-only and do nothing here.
 
-Status: **protocol works, panel does not yet render.** Config 2 holds indefinitely,
-frames are accepted and ACKed, panel descriptor reads correctly. See "Open" below.
+Status: **WORKING.** The panel renders. Verified red/green/blue full-width, correct colour
+order, image persists after the driver stops updating.
 
 ## Layout
 
@@ -80,12 +80,22 @@ Framebuffer update — ONE bulk write of `[60-byte request][pixels][88-byte padd
 > (padding length, padding contents, RequestLength, and two reserved fields). Read the
 > vendored source directly.
 
-## Open
+## Verified
 
-Frames ACK but the panel stays dark. The HID feature report (Apple usage `0xff120021`,
-report id 2, `[rid, aux=1, disp=1]` via `HIDIOCSFEATURE` — see `scripts/dispon.py`) lights
-the backlight white, but no framebuffer content has ever appeared. The byte-exact format
-above is implemented and built but has **not yet been tested on hardware**.
+Panel **2170 x 60**, **3 bytes per pixel**, byte order `r,g,b` as written (the "ABGR" name in
+the descriptor does not imply a swap). Colours can be changed live:
 
-Note DFRDisplayKm contains no backlight command at all, implying the panel should light on a
-valid frame — so the enable may be a red herring and the frame may still be subtly wrong.
+    echo 255 | sudo tee /sys/module/dfr_probe/parameters/colr
+
+## What actually fixed it
+
+Four values in the framebuffer request were wrong, every one of them invented from *summaries*
+of the Windows driver rather than its source. Reading `reference/DFRDisplayKm/` directly fixed
+all four at once. See the framebuffer table above — `Reserved1 = 0x09`,
+`RequestLength = total - 16`, `Reserved0 = 0x0001`, and the 88-byte patterned padding.
+
+## Still to do
+
+- draw something useful rather than a solid fill
+- persistence across boot
+- function row / touch input while in config 2 (currently `apple-ibridge` must stay unloaded)
