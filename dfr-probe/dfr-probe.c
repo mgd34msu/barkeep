@@ -37,7 +37,7 @@
 #define DFR_HDR_LEN      32
 #define DFR_RESP_LEN     512
 
-static int rect_w = 64;     module_param(rect_w, int, 0644);
+static int rect_w = 2170;   module_param(rect_w, int, 0644);  /* full panel width */
 static int bpp    = 3;      module_param(bpp, int, 0644);
 static int colr   = 0xff;   module_param(colr, int, 0644);
 static int colg   = 0x00;   module_param(colg, int, 0644);
@@ -46,9 +46,11 @@ static uint key   = DFR_KEY_WDSP; module_param(key, uint, 0644);
 static int order  = 0;   module_param(order, int, 0644);  /* 0=RGB 1=BGR */
 static int period = 1;   module_param(period, int, 0644);  /* keep redrawing */
 static int draw_en = 1;  module_param(draw_en, int, 0644); /* 0 = handshake only, never draw */
-static int padlen = 96;  module_param(padlen, int, 0644); /* DfrUpdatePadding size; 0 disables */
+static int padlen = 88;  module_param(padlen, int, 0644); /* only used by fbmode=0; fbmode=1 uses the real 88-byte table */
 static int fb_ep = 0;    module_param(fb_ep, int, 0644);   /* 0 = use if2.3 OUT (0x02); else raw EP addr e.g. 0x05 */
-static int fbmode = 0;   module_param(fbmode, int, 0644);  /* 0 = WDSP style (the one that visibly flashed), 1 = DFR_UPDATE_FB_REQUEST */
+/* fbmode 1 = DFR_UPDATE_FB_REQUEST - the ONLY one that renders. 0 = the old
+ * WDSP experiment, kept for reference; it ACKs but never paints. */
+static int fbmode = 1;   module_param(fbmode, int, 0644);
 static int split = 0;    module_param(split, int, 0644);   /* 1 = geometry pkt, then pixels as a 2nd transfer */
 static int extra = 0;    module_param(extra, int, 0644);   /* 1 = send SORI/KBMC/KBMD/SBTN/RUSO after GINF */
 

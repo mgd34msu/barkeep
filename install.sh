@@ -87,7 +87,8 @@ D=/sys/bus/usb/devices/1-3
 for m in apple_ib_tb apple_ib_als apple_ibridge; do rmmod $m 2>/dev/null; done
 rmmod dfr_probe 2>/dev/null; rmmod ibridge_cfg 2>/dev/null
 modprobe ibridge_cfg config=1 || exit 1
-modprobe dfr_probe            || exit 1
+# explicit params so this never depends on module defaults
+modprobe dfr_probe rect_w=2170 bpp=3 fbmode=1 period=1 || exit 1
 echo 2 > /sys/module/ibridge_cfg/parameters/config
 echo 0 > $D/authorized; sleep 2; echo 1 > $D/authorized; sleep 4
 cfg=$(cat $D/bConfigurationValue 2>/dev/null)
@@ -97,18 +98,24 @@ python3 /usr/local/lib/t1-touchbar/dispon.py && echo "panel on"
 EOS
     cat > "$LIBDIR/dfr-reset.sh" <<'EOS'
 #!/usr/bin/env bash
-# Restore the stock firmware function row.
+# Restore the stock firmware function row. Every step is time-bounded: this
+# runs as ExecStop, and anything that hangs here gets SIGTERMed half-done and
+# leaves the panel dark.
 D=/sys/bus/usb/devices/1-3
 pkill -f dfr-bar.py 2>/dev/null
-rmmod dfr_probe 2>/dev/null; rmmod ibridge_cfg 2>/dev/null
-[ "$(cat $D/bConfigurationValue 2>/dev/null)" != "1" ] && \
-    echo 1 > $D/bConfigurationValue 2>/dev/null && sleep 3
-echo on > $D/power/control 2>/dev/null
-modprobe apple-ibridge 2>/dev/null
-modprobe apple-ib-tb   2>/dev/null
-modprobe apple-ib-als  2>/dev/null
-[ -x /usr/local/bin/touchbar-rebind ] && /usr/local/bin/touchbar-rebind >/dev/null 2>&1
-echo "config=$(cat $D/bConfigurationValue 2>/dev/null)"
+sleep 1
+timeout 10 rmmod dfr_probe 2>/dev/null
+timeout 10 rmmod ibridge_cfg 2>/dev/null
+if [ "$(timeout 5 cat $D/bConfigurationValue 2>/dev/null)" != "1" ]; then
+    timeout 15 sh -c "echo 1 > $D/bConfigurationValue" 2>/dev/null
+    sleep 3
+fi
+timeout 5 sh -c "echo on > $D/power/control" 2>/dev/null
+timeout 15 modprobe apple-ibridge 2>/dev/null
+timeout 15 modprobe apple-ib-tb   2>/dev/null
+timeout 15 modprobe apple-ib-als  2>/dev/null
+[ -x /usr/local/bin/touchbar-rebind ] && timeout 30 /usr/local/bin/touchbar-rebind >/dev/null 2>&1
+echo "config=$(timeout 5 cat $D/bConfigurationValue 2>/dev/null)"
 EOS
     rm -f "$LIBDIR/dfr-up.sh.tmp"
     chmod 755 "$LIBDIR/dfr-up.sh" "$LIBDIR/dfr-reset.sh"

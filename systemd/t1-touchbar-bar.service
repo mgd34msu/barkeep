@@ -2,6 +2,7 @@
 Description=Apple T1 Touch Bar UI (function row + colour tracking)
 Requires=t1-touchbar-display.service
 After=t1-touchbar-display.service
+ConditionPathExists=/dev/dfr0
 
 [Service]
 Type=simple
