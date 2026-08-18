@@ -15,6 +15,9 @@
 #include <linux/slab.h>
 #include <linux/usb.h>
 #include <linux/workqueue.h>
+#include <linux/miscdevice.h>
+#include <linux/fs.h>
+#include <linux/uaccess.h>
 
 #define DFR_REQ_HEADER   0x15120002u
 #define DFR_REQ_HEADER_UDCL 0x01120002u  /* macOS uses flags 0x112 for UDCL only */
@@ -50,6 +53,13 @@ static int split = 0;    module_param(split, int, 0644);   /* 1 = geometry pkt, 
 static int extra = 0;    module_param(extra, int, 0644);   /* 1 = send SORI/KBMC/KBMD/SBTN/RUSO after GINF */
 
 static void *fb_buf;             /* preallocated at module load */
+static u8 *user_fb;              /* pixels pushed from /dev/dfr0 */
+static bool user_fb_valid;
+static DEFINE_MUTEX(user_fb_lock);
+#define PANEL_W 2170
+#define PANEL_H 60
+#define PANEL_BPP 3
+#define PANEL_FB_BYTES (PANEL_W * PANEL_H * PANEL_BPP)
 #define FB_MAX (512 * 1024)
 
 
@@ -212,6 +222,13 @@ static void draw(struct dfr_ctx *ctx)
 	memcpy(b + 16 + content + nbytes, dfr_update_padding, pad);
 	px = b + 16 + content;
 fill:
+	if (user_fb_valid && bpp == PANEL_BPP &&
+	    w * h * bpp <= PANEL_FB_BYTES) {
+		mutex_lock(&user_fb_lock);
+		memcpy(px, user_fb, w * h * bpp);
+		mutex_unlock(&user_fb_lock);
+		goto sent;
+	}
 	for (i = 0; i < w * h; i++) {
 		if (order) {
 			px[i * bpp + 0] = colb;
@@ -228,6 +245,7 @@ fill:
 
 	if (fbmode == 0)
 		total = 16 + 0x10 + 24 + nbytes;
+sent:
 	{
 		struct urb *u = usb_alloc_urb(0, GFP_ATOMIC);
 		u32 reqlen = 16 + content;
@@ -431,6 +449,38 @@ static void dfr_disconnect(struct usb_interface *intf)
 	usb_set_intfdata(intf, NULL);
 }
 
+static ssize_t dfr_dev_write(struct file *f, const char __user *ubuf,
+			     size_t len, loff_t *off)
+{
+	size_t n = min_t(size_t, len, PANEL_FB_BYTES);
+
+	if (!user_fb)
+		return -ENOMEM;
+	mutex_lock(&user_fb_lock);
+	if (copy_from_user(user_fb, ubuf, n)) {
+		mutex_unlock(&user_fb_lock);
+		return -EFAULT;
+	}
+	if (n < PANEL_FB_BYTES)
+		memset(user_fb + n, 0, PANEL_FB_BYTES - n);
+	user_fb_valid = true;
+	mutex_unlock(&user_fb_lock);
+	return len;
+}
+
+static const struct file_operations dfr_dev_fops = {
+	.owner = THIS_MODULE,
+	.write = dfr_dev_write,
+	.llseek = noop_llseek,
+};
+
+static struct miscdevice dfr_misc = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name  = "dfr0",
+	.fops  = &dfr_dev_fops,
+	.mode  = 0666,
+};
+
 static const struct usb_device_id dfr_ids[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x05ac, 0x8600, 0x10, 0x00, 0x00) },  /* DFR display */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x05ac, 0x8600, 0x02, 0x0d, 0x00) },  /* CDC-NCM ctrl */
@@ -453,11 +503,21 @@ static int __init dfr_init(void)
 	fb_buf = kmalloc(FB_MAX, GFP_KERNEL);
 	if (!fb_buf)
 		return -ENOMEM;
+	user_fb = kzalloc(PANEL_FB_BYTES, GFP_KERNEL);
+	if (!user_fb) {
+		kfree(fb_buf);
+		return -ENOMEM;
+	}
+	misc_register(&dfr_misc);
+	pr_info("dfr-probe: /dev/dfr0 ready (%dx%d, %d bpp, %d bytes/frame)\n",
+		PANEL_W, PANEL_H, PANEL_BPP, PANEL_FB_BYTES);
 	return usb_register(&dfr_driver);
 }
 static void __exit dfr_exit(void)
 {
 	usb_deregister(&dfr_driver);
+	misc_deregister(&dfr_misc);
+	kfree(user_fb);
 	kfree(fb_buf);
 }
 module_init(dfr_init);

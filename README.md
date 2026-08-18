@@ -3,8 +3,8 @@
 Target: **MacBookPro13,2** (2016 13" Touch Bar), Apple **T1** iBridge, USB `05ac:8600`.
 Not T2. `tiny-dfr`, `appletbdrm` and `hid-appletb-*` are all T2-only and do nothing here.
 
-Status: **WORKING.** The panel renders. Verified red/green/blue full-width, correct colour
-order, image persists after the driver stops updating.
+Status: **WORKING — arbitrary images and video.** Per-pixel control verified (gradients,
+colour bars), and 30fps video playback confirmed.
 
 ## Layout
 
@@ -16,8 +16,14 @@ order, image persists after the driver stops updating.
 ## Run
 
     bash scripts/build.sh
-    sudo bash scripts/dfr-go.sh      # bring up + colour cycle
+    sudo bash scripts/dfr-up.sh      # bring up the session, leave it running
+    python3 scripts/dfr-play.py test        # gradient
+    python3 scripts/dfr-play.py bars        # colour bars
+    python3 scripts/dfr-play.py pic.png     # a still image
+    python3 scripts/dfr-play.py clip.mp4    # video, looping (--once, --fps N)
     sudo bash scripts/dfr-reset.sh   # restore the stock function row, no reboot
+
+`dfr-go.sh` is the original bring-up + red/green/blue self-test.
 
 ## What was hard, and why
 
@@ -93,6 +99,16 @@ Four values in the framebuffer request were wrong, every one of them invented fr
 of the Windows driver rather than its source. Reading `reference/DFRDisplayKm/` directly fixed
 all four at once. See the framebuffer table above — `Reserved1 = 0x09`,
 `RequestLength = total - 16`, `Reserved0 = 0x0001`, and the 88-byte patterned padding.
+
+## Pushing pixels
+
+`dfr-probe` exposes **`/dev/dfr0`**. Write exactly one frame: **2170 x 60 RGB888 =
+390600 bytes**. Short writes are zero-padded. The driver re-sends the current buffer
+continuously, which is also what holds the display session open.
+
+Anything ffmpeg can decode works:
+
+    ffmpeg -i clip.mp4 -vf scale=2170:60 -f rawvideo -pix_fmt rgb24 - > /dev/dfr0
 
 ## Still to do
 
