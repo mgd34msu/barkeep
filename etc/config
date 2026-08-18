@@ -1,0 +1,16 @@
+# /etc/t1-touchbar/config — options for the Touch Bar UI.
+# Edit, then: sudo systemctl restart t1-touchbar-bar
+
+# --source screen    colours currently on screen (uses grim; captures your
+#                    desktop on a timer, in memory only, never written to disk)
+# --source theme     the desktop's own palette from colors.toml (no capture)
+# --source wallpaper the backdrop image
+#
+# 'screen' is the default. At boot there may be no Wayland session yet, so the
+# first palette is seeded from theme/wallpaper - the screen watcher keeps trying
+# and takes over as soon as your session exists.
+DFR_ARGS="--source screen --flow 30 --fade 2 --poll 3 --threshold 18"
+
+# Desktop user whose session/theme/wallpaper is read (and whose Wayland
+# socket 'screen' sampling needs). Leave blank to auto-detect uid 1000.
+DFR_USER=""

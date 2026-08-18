@@ -14,7 +14,26 @@ function row: drawn icons over a gradient sampled from the desktop wallpaper, wi
     scripts/       build.sh, dfr-go.sh (run), dfr-reset.sh (undo), dispon.py (panel enable)
     reference/     imbushuo/DFRDisplayKm — the working Windows driver (MIT). READ THE SOURCE.
 
-## Run
+## Install
+
+    sudo ./install.sh              # DKMS modules + scripts + systemd, enabled at boot
+    sudo ./install.sh status
+    sudo ./install.sh uninstall    # removes everything, restores the stock function row
+
+Then it comes up on every boot. Config lives in `/etc/t1-touchbar/config`:
+
+    DFR_ARGS="--source screen --flow 30 --fade 2 --poll 3 --threshold 18"
+
+    sudo systemctl restart t1-touchbar-bar     # after editing
+    t1-touchbar {start|stop|status|play <file|test|bars|flow>}
+
+Units: `t1-touchbar-display.service` (enters USB config 2, enables the panel) then
+`t1-touchbar-bar.service` (the UI). Modules are DKMS, so they rebuild on kernel updates.
+
+**In display mode `apple-ibridge` is unloaded**, so the stock firmware function row is
+replaced by this one. `uninstall` puts it back.
+
+## Run from the source tree
 
     bash scripts/build.sh
     sudo bash scripts/dfr-up.sh      # bring up the session, leave it running

@@ -225,8 +225,16 @@ def screen_palette(n=6, scale=0.05):
     user, uid, rt, wd = _desktop_env()
     cmd = ["grim", "-s", str(scale), "-t", "ppm", "-"]
     if os.geteuid() == 0:
-        cmd = ["sudo", "-n", "-u", user, "env",
-               f"XDG_RUNTIME_DIR={rt}", f"WAYLAND_DISPLAY={wd}"] + cmd
+        # setpriv drops to the desktop user WITHOUT opening a PAM session -
+        # sudo/runuser would log an auth record on every single sample.
+        import shutil
+        env = ["env", f"XDG_RUNTIME_DIR={rt}", f"WAYLAND_DISPLAY={wd}",
+               f"HOME={os.path.expanduser('~' + user)}"]
+        if shutil.which("setpriv"):
+            cmd = ["setpriv", "--reuid", str(uid), "--regid", str(uid),
+                   "--clear-groups"] + env + cmd
+        else:
+            cmd = ["sudo", "-n", "-u", user] + env + cmd
     r = subprocess.run(cmd, capture_output=True, timeout=8)
     if r.returncode != 0 or not r.stdout:
         raise RuntimeError((r.stderr or b"grim failed").decode()[:120])
@@ -546,6 +554,17 @@ def main():
     if not os.path.exists(DEV):
         sys.exit(f"{DEV} missing - run scripts/dfr-up.sh first")
 
+    # Single-instance lock: two writers on /dev/dfr0 fight and the bar flickers
+    # wildly. Held for the life of the process, released automatically on exit.
+    import fcntl as _f
+    lockf = open("/run/dfr-bar.lock", "w")
+    try:
+        _f.flock(lockf, _f.LOCK_EX | _f.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("another dfr-bar is already running "
+                 "(sudo systemctl stop t1-touchbar-bar, or kill it first)")
+    lockf.write(str(os.getpid())); lockf.flush()
+
     state = {"pressed": -1, "dirty": True, "stop": False,
              "row_from": None, "row_to": None, "fade_t0": 0.0}
 
@@ -557,15 +576,19 @@ def main():
                 os.path.realpath(wall))
         return theme_palette(), "theme"
 
+    # Seed the palette from whatever works right now, but KEEP the requested
+    # source: at boot there may be no Wayland session yet for 'screen', and the
+    # watcher must keep trying so it takes over once the session appears.
+    wanted = source
     for src in (source, "theme", "wallpaper"):
         try:
             cols, why = initial(src)
-            source = src
             break
         except Exception as e:
-            print(f"{src} source unavailable: {e}")
+            print(f"{src} unavailable right now: {e}")
     else:
         cols, why = [(137, 180, 250), (203, 166, 247), (166, 227, 161)], "builtin"
+    source = wanted
     set_palette(state, cols, why)
     state["row_from"] = None                     # no fade on the very first frame
 

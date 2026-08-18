@@ -1,0 +1,16 @@
+[Unit]
+Description=Apple T1 Touch Bar display session (USB config 2)
+Documentation=https://github.com/xeeban/macbook-t1-linux
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# apple-ibridge force-selects USB config 1 and will tear this down; it must go.
+ExecStart=/usr/local/lib/t1-touchbar/dfr-up.sh
+ExecStop=/usr/local/lib/t1-touchbar/dfr-reset.sh
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

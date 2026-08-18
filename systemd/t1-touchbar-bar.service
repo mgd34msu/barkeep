@@ -1,0 +1,14 @@
+[Unit]
+Description=Apple T1 Touch Bar UI (function row + colour tracking)
+Requires=t1-touchbar-display.service
+After=t1-touchbar-display.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/t1-touchbar/config
+ExecStart=/bin/sh -c '/usr/bin/python3 -u /usr/local/lib/t1-touchbar/dfr-bar.py $DFR_ARGS'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
