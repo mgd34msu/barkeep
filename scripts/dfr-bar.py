@@ -51,6 +51,14 @@ IDLE_S     = 30.0                # quiet for this long => hide the keys
 IDLE_OUT_S = 2.0                 # fade them out over this
 IDLE_IN_S  = 1.0                 # and back in over this
 
+
+def ease(t):
+    """smoothstep, clamped. THE easing curve - every transition on the bar uses
+    it (palette cross-fade, startup rise from black, key auto-hide), so when two
+    overlap they move on the same curve and read as one motion."""
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    return t * t * (3 - 2 * t)
+
 # Layer 0: the media/control strip. Layer 1: F1-F12 while Fn is held.
 # icon kind, evdev keycode, relative width. Icons are DRAWN, not glyphs -
 # font coverage for emoji/media symbols is unreliable (tofu boxes).
@@ -157,7 +165,7 @@ def gradient_strip(cols, length, hold=0.55):
             out.append(tuple(a))
         else:
             g = (f - hold) / (1.0 - hold)
-            g = g * g * (3 - 2 * g)                 # smoothstep the short blend
+            g = ease(g)                             # smoothstep the short blend
             out.append(tuple(int(a[j] + (b[j] - a[j]) * g) for j in range(3)))
     return out
 
@@ -276,12 +284,32 @@ def strip_row(cols):
                            b"".join(bytes(c) for c in gradient_strip(cols, W)))
 
 
+def displayed_row(state):
+    """the gradient exactly as it is on the panel at this instant.
+
+    Pure: no state mutation, so the palette watcher threads can ask for it too.
+    """
+    a, b = state.get("row_from"), state.get("row_to")
+    if a is None or b is None:
+        return b
+    t = (time.time() - state.get("fade_t0", 0)) / max(state.get("fade_s", 2.0), 1e-6)
+    if t >= 1.0:
+        return b
+    return Image.blend(a, b, ease(t))
+
+
 def set_palette(state, cols, why):
-    """cross-fade the WHOLE bar from the current gradient to the new one"""
+    """cross-fade the WHOLE bar from the current gradient to the new one.
+
+    Starts from what is ON THE PANEL right now, not from the previous fade's
+    destination. Screen sampling polls every 3s while a fade takes 2s, so a
+    second colour change lands mid-fade often; using the old target as the
+    start snapped the background before fading it, which read as a jolt.
+    """
     new = strip_row(cols)
     if state.get("row_to") is not None and new.tobytes() == state["row_to"].tobytes():
         return
-    state["row_from"] = state.get("row_to") or new
+    state["row_from"] = displayed_row(state) or new
     state["row_to"] = new
     state["fade_t0"] = time.time()
     state["dirty"] = True
@@ -293,13 +321,11 @@ def current_row(state, fade_s):
     a, b = state.get("row_from"), state.get("row_to")
     if a is None:
         return b
-    t = (time.time() - state.get("fade_t0", 0)) / max(fade_s, 1e-6)
-    if t >= 1.0:
+    if (time.time() - state.get("fade_t0", 0)) / max(fade_s, 1e-6) >= 1.0:
         state["row_from"] = None
         return b
-    t = t * t * (3 - 2 * t)                      # ease in/out
     state["fading"] = True
-    return Image.blend(a, b, t)
+    return displayed_row(state)
 
 
 def watch_wallpaper(path, state, period=2.0):
@@ -753,7 +779,7 @@ def main():
     lockf.write(str(os.getpid())); lockf.flush()
 
     state = {"pressed": -1, "dirty": True, "stop": False, "layer": 0,
-             "row_from": None, "row_to": None, "fade_t0": 0.0,
+             "row_from": None, "row_to": None, "fade_t0": 0.0, "fade_s": fade_s,
              "last_input": time.time(), "btn_p": 1.0}
 
     def initial(src):
@@ -842,7 +868,7 @@ def main():
                 step = dt / max(idle_in_s if want > p else idle_out_s, 1e-6)
                 p = min(want, p + step) if want > p else max(want, p - step)
                 state["btn_p"] = p
-                btn = p * p * (3 - 2 * p)          # same smoothstep as above
+                btn = ease(p)
                 btn_fading = 0.0 < p < 1.0
             # Fade the WHOLE frame up from black on startup, using the same
             # eased curve as palette changes. The panel is lit while still
@@ -851,7 +877,7 @@ def main():
             if intro_t0 is not None:
                 e = (time.time() - intro_t0) / max(fade_s, 1e-6)
                 if e < 1.0:
-                    intro = e * e * (3 - 2 * e)
+                    intro = ease(e)
                 else:
                     intro_t0 = None
 
