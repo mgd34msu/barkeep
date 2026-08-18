@@ -1,0 +1,12 @@
+ibridge-cfg/*.o
+ibridge-cfg/*.ko
+ibridge-cfg/.*.cmd
+ibridge-cfg/Module.symvers
+ibridge-cfg/modules.order
+dfr-probe/*.o
+dfr-probe/*.ko
+dfr-probe/.*.cmd
+dfr-probe/Module.symvers
+dfr-probe/modules.order
+*.mod
+*.mod.c
