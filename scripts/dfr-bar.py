@@ -79,35 +79,91 @@ def find_font(size):
     return ImageFont.load_default()
 
 
-def wallpaper_palette(path, n=6):
-    """dominant colours of the wallpaper, ordered around the colour wheel"""
+def wallpaper_palette(path, n=6, merge_dist=60):
+    """Dominant colours actually PRESENT in the wallpaper.
+
+    Quantizing alone is not enough: anti-aliased edges (e.g. a logo outline)
+    produce blend colours that exist nowhere as a real region. So we quantize,
+    then merge entries that are perceptually close, keeping the most common
+    member of each cluster and its total share.
+    """
+    import colorsys
     im = Image.open(path).convert("RGB")
     im.thumbnail((200, 200))
-    q = im.quantize(colors=n, method=Image.MEDIANCUT).convert("RGB")
+    q = im.quantize(colors=n * 2, method=Image.MEDIANCUT).convert("RGB")
     counts = {}
     for px in q.getdata():
         counts[px] = counts.get(px, 0) + 1
-    cols = [c for c, _ in sorted(counts.items(), key=lambda kv: -kv[1])][:n]
-    # drop near-blacks so the gradient has some life, but keep at least 3
-    lively = [c for c in cols if sum(c) > 90]
-    cols = lively if len(lively) >= 3 else cols
-    import colorsys
-    cols.sort(key=lambda c: colorsys.rgb_to_hsv(*[v / 255 for v in c])[0])
-    return cols
+    ordered = sorted(counts.items(), key=lambda kv: -kv[1])
+
+    clusters = []                       # [representative, total_weight]
+    for col, wgt in ordered:
+        for cl in clusters:
+            r = cl[0]
+            if math.dist(col, r) < merge_dist:
+                cl[1] += wgt
+                break
+        else:
+            clusters.append([col, wgt])
+
+    total = sum(c[1] for c in clusters) or 1
+    keep = [c for c in clusters if c[1] / total >= 0.04][:n] or clusters[:n]
+    if len(keep) < 2:
+        keep = clusters[:2] if len(clusters) >= 2 else keep
+    keep.sort(key=lambda c: colorsys.rgb_to_hsv(*[v / 255 for v in c[0]])[0])
+    return [tuple(c[0]) for c in keep]
 
 
-def gradient_strip(cols, length):
-    """smooth cyclic interpolation through `cols`, `length` entries"""
+def gradient_strip(cols, length, hold=0.55):
+    """Cyclic ramp that HOLDS each sampled colour, then blends briefly.
+
+    `hold` is the fraction of each segment showing the real colour, so most of
+    the bar is a colour that genuinely appears in the wallpaper rather than an
+    invented in-between shade.
+    """
     out = []
     k = len(cols)
     for i in range(length):
         t = (i / length) * k
-        a = cols[int(t) % k]
-        b = cols[(int(t) + 1) % k]
-        f = t - int(t)
-        f = f * f * (3 - 2 * f)                     # smoothstep
-        out.append(tuple(int(a[j] + (b[j] - a[j]) * f) for j in range(3)))
+        idx = int(t)
+        f = t - idx
+        a = cols[idx % k]
+        b = cols[(idx + 1) % k]
+        if f <= hold:
+            out.append(tuple(a))
+        else:
+            g = (f - hold) / (1.0 - hold)
+            g = g * g * (3 - 2 * g)                 # smoothstep the short blend
+            out.append(tuple(int(a[j] + (b[j] - a[j]) * g) for j in range(3)))
     return out
+
+
+def wallpaper_stamp(path):
+    """identity of the CURRENT wallpaper: theme changes swap the symlink target"""
+    try:
+        real = os.path.realpath(path)
+        return (real, os.stat(real).st_mtime)
+    except OSError:
+        return None
+
+
+def watch_wallpaper(path, state, period=2.0):
+    """re-sample the palette whenever the wallpaper changes"""
+    stamp = wallpaper_stamp(path)
+    while not state["stop"]:
+        time.sleep(period)
+        cur = wallpaper_stamp(path)
+        if cur and cur != stamp:
+            stamp = cur
+            try:
+                cols = wallpaper_palette(path)
+            except Exception as e:
+                print("wallpaper reload failed:", e)
+                continue
+            state["strip"] = gradient_strip(cols, W)
+            state["dirty"] = True
+            print("wallpaper changed ->", os.path.basename(cur[0]))
+            print("  " + "  ".join("#%02x%02x%02x" % c for c in cols))
 
 
 # ---------------------------------------------------------------- drawing
@@ -339,9 +395,13 @@ def main():
         cols = [(122, 162, 247), (187, 154, 247), (247, 118, 142), (158, 206, 106)]
         print("wallpaper not found, using theme-ish default palette")
 
-    strip = gradient_strip(cols, W)
     font = find_font(26)
-    state = {"pressed": -1, "dirty": True, "stop": False}
+    state = {"pressed": -1, "dirty": True, "stop": False,
+             "strip": gradient_strip(cols, W)}
+
+    if src:
+        threading.Thread(target=watch_wallpaper, args=(wall, state),
+                         daemon=True).start()
 
     node = None if no_touch else find_digitizer()
     if node:
@@ -356,7 +416,7 @@ def main():
         while True:
             now = time.time()
             if state["dirty"] or (flow and now - last_draw >= 1.0 / 30):
-                img = render(strip, offset, state["pressed"], font)
+                img = render(state["strip"], offset, state["pressed"], font)
                 dev.write(to_panel(img)); dev.flush()
                 state["dirty"] = False
                 last_draw = now

@@ -122,6 +122,17 @@ prev-play-next / mute / volume as **vector icons** (font glyph coverage for emoj
 symbols is unreliable - they render as tofu), over a gradient built from the dominant colours
 of `~/.local/state/omarchy/current/background`. `--flow N` drifts the gradient N px/sec.
 
+The wallpaper is **watched live** (2 s poll on the symlink target + mtime, since a theme
+change swaps the link) and the palette re-samples automatically.
+
+Getting the palette to look right took two fixes:
+- **Merge near-duplicate colours.** Quantizing alone picks up anti-aliased edge pixels - a
+  logo outline yields blend shades that exist nowhere as a real region. Colours within a
+  distance of 60 are clustered and only the representative kept.
+- **Hold each colour, then blend briefly.** Continuous interpolation between N colours means
+  most of the bar shows invented in-between shades. Each sampled colour now occupies ~55%% of
+  its segment before a short smoothstep transition.
+
 Touch: the digitizer is a non-standard HID on **config-2 interface 2, EP 0x83**; reports are
 ~52 bytes with a **little-endian float32 X in [0.5, 1.0]** in the first 4 bytes. Read via
 hidraw *alongside* `hid-generic` (no unbinding), mapped to key zones, injected with uinput.
