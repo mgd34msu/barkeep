@@ -636,7 +636,7 @@ def main():
         cols, why = [(137, 180, 250), (203, 166, 247), (166, 227, 161)], "builtin"
     source = wanted
     set_palette(state, cols, why)
-    state["row_from"] = None                     # no fade on the very first frame
+    state["row_from"] = None                     # palette fade starts settled
 
     font = find_font(26)
 
@@ -658,22 +658,38 @@ def main():
 
     dev = open(DEV, "wb", buffering=0)
     offset = 0
-    lit = False
+    black = Image.new("RGB", (W, H))
+
+    # Put BLACK on the panel first, then light it: the backlight comes up with
+    # nothing visible on it, so there is no pop. The loop then fades the real
+    # frame up out of that black using the same eased curve as palette changes.
+    dev.write(to_panel(black)); dev.flush()
+    n = panel_on()
+    print(f"panel on showing black ({n} report(s)); fading in over {fade_s}s")
+    lit = True
+    intro_t0 = time.time()
     period = 1.0 / 30
     try:
         while True:
             state["fading"] = False
             row = current_row(state, fade_s)
-            if state["dirty"] or state["fading"] or flow:
+            # Fade the WHOLE frame up from black on startup, using the same
+            # eased curve as palette changes. The panel is lit while still
+            # showing black, so there is no pop - it rises out of black.
+            intro = 1.0
+            if intro_t0 is not None:
+                e = (time.time() - intro_t0) / max(fade_s, 1e-6)
+                if e < 1.0:
+                    intro = e * e * (3 - 2 * e)
+                else:
+                    intro_t0 = None
+
+            if state["dirty"] or state["fading"] or flow or intro < 1.0:
                 img = render(row, offset, state["pressed"], font)
+                if intro < 1.0:
+                    img = Image.blend(black, img, intro)
                 dev.write(to_panel(img)); dev.flush()
                 state["dirty"] = False
-                if not lit:
-                    # first real frame is on the panel - now light it, so the
-                    # UI is what appears rather than a placeholder fill
-                    n = panel_on()
-                    print(f"panel on after first frame ({n} report(s))")
-                    lit = True
             if flow:
                 offset = (offset + max(1, int(flow / 30))) % W
             time.sleep(period)
