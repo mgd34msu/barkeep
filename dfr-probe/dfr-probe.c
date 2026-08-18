@@ -55,7 +55,7 @@ static int extra = 0;    module_param(extra, int, 0644);   /* 1 = send SORI/KBMC
 static void *fb_buf;             /* preallocated at module load */
 static u8 *user_fb;              /* pixels pushed from /dev/dfr0 */
 static bool user_fb_valid;
-static DEFINE_MUTEX(user_fb_lock);
+static DEFINE_SPINLOCK(user_fb_lock);   /* draw() runs in URB completion (atomic) - MUST NOT be a mutex */
 #define PANEL_W 2170
 #define PANEL_H 60
 #define PANEL_BPP 3
@@ -224,9 +224,13 @@ static void draw(struct dfr_ctx *ctx)
 fill:
 	if (user_fb_valid && bpp == PANEL_BPP &&
 	    w * h * bpp <= PANEL_FB_BYTES) {
-		mutex_lock(&user_fb_lock);
-		memcpy(px, user_fb, w * h * bpp);
-		mutex_unlock(&user_fb_lock);
+		{
+			unsigned long flags;
+
+			spin_lock_irqsave(&user_fb_lock, flags);
+			memcpy(px, user_fb, w * h * bpp);
+			spin_unlock_irqrestore(&user_fb_lock, flags);
+		}
 		goto sent;
 	}
 	for (i = 0; i < w * h; i++) {
@@ -456,15 +460,25 @@ static ssize_t dfr_dev_write(struct file *f, const char __user *ubuf,
 
 	if (!user_fb)
 		return -ENOMEM;
-	mutex_lock(&user_fb_lock);
-	if (copy_from_user(user_fb, ubuf, n)) {
-		mutex_unlock(&user_fb_lock);
-		return -EFAULT;
+	/* copy_from_user can sleep, so stage outside the lock */
+	{
+		unsigned long flags;
+		u8 *staging = kmalloc(PANEL_FB_BYTES, GFP_KERNEL);
+
+		if (!staging)
+			return -ENOMEM;
+		if (copy_from_user(staging, ubuf, n)) {
+			kfree(staging);
+			return -EFAULT;
+		}
+		if (n < PANEL_FB_BYTES)
+			memset(staging + n, 0, PANEL_FB_BYTES - n);
+		spin_lock_irqsave(&user_fb_lock, flags);
+		memcpy(user_fb, staging, PANEL_FB_BYTES);
+		user_fb_valid = true;
+		spin_unlock_irqrestore(&user_fb_lock, flags);
+		kfree(staging);
 	}
-	if (n < PANEL_FB_BYTES)
-		memset(user_fb + n, 0, PANEL_FB_BYTES - n);
-	user_fb_valid = true;
-	mutex_unlock(&user_fb_lock);
 	return len;
 }
 

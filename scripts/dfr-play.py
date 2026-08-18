@@ -12,9 +12,25 @@ Panel is 2170x60 RGB888 = 390600 bytes per frame.
 """
 import sys, os, time, subprocess, shutil
 
-W, H, BPP = 2170, 60, 3
+# The panel is physically 2170x60 landscape, but the framebuffer is PORTRAIT:
+# 60 wide x 2170 tall, rotated 90deg. So the wire buffer is 60-pixel rows.
+W, H, BPP = 2170, 60, 3          # logical, as the user sees the bar
+PW, PH = H, W                     # panel buffer: 60 wide, 2170 tall
 FRAME = W * H * BPP
 DEV = "/dev/dfr0"
+ROT = 1                           # ffmpeg transpose mode (1=cw, 2=ccw)
+
+
+def transpose_rgb(buf):
+    """logical 2170x60 RGB -> panel 60x2170 RGB"""
+    out = bytearray(FRAME)
+    for y in range(H):
+        row = y * W * BPP
+        for x in range(W):
+            si = row + x * BPP
+            di = (x * PW + y) * BPP
+            out[di:di+BPP] = buf[si:si+BPP]
+    return bytes(out)
 
 
 def send(dev, buf):
@@ -23,26 +39,28 @@ def send(dev, buf):
 
 
 def gradient():
-    row = bytearray()
-    for x in range(W):
-        t = x / (W - 1)
-        row += bytes((int(255 * t), int(255 * (1 - t)), int(128 + 127 * (t * 2 % 1))))
-    return bytes(row) * H
+    """left-to-right gradient along the physical bar = panel's long axis"""
+    out = bytearray()
+    for ly in range(PH):                 # long axis = physical left..right
+        t = ly / (PH - 1)
+        px = bytes((int(255 * t), int(255 * (1 - t)), int(128 + 127 * (t * 2 % 1))))
+        out += px * PW                   # constant across the short axis
+    return bytes(out)
 
 
 def bars():
     cols = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,255,255),(255,0,255),(255,255,255),(0,0,0)]
-    row = bytearray()
-    for x in range(W):
-        row += bytes(cols[x * len(cols) // W])
-    return bytes(row) * H
+    out = bytearray()
+    for ly in range(PH):
+        out += bytes(cols[ly * len(cols) // PH]) * PW
+    return bytes(out)
 
 
 def ffmpeg_frames(path, fps):
     if not shutil.which("ffmpeg"):
         sys.exit("ffmpeg not found - install it, or use 'test'/'bars'")
     cmd = ["ffmpeg", "-loglevel", "error", "-i", path,
-           "-vf", f"scale={W}:{H}:flags=bilinear", "-r", str(fps),
+           "-vf", f"scale={W}:{H}:flags=bilinear,transpose={ROT}", "-r", str(fps),
            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     while True:
@@ -58,6 +76,9 @@ def main():
     fps = 30
     once = "--once" in args
     if "--once" in args: args.remove("--once")
+    global ROT
+    if "--rot" in args:
+        i = args.index("--rot"); ROT = int(args[i+1]); del args[i:i+2]
     if "--fps" in args:
         i = args.index("--fps"); fps = int(args[i+1]); del args[i:i+2]
     if not args:

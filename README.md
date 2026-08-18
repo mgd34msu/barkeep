@@ -110,6 +110,26 @@ Anything ffmpeg can decode works:
 
     ffmpeg -i clip.mp4 -vf scale=2170:60 -f rawvideo -pix_fmt rgb24 - > /dev/dfr0
 
+## Panel orientation
+
+The panel is physically **2170x60 landscape** but the framebuffer is **60 wide x 2170 tall,
+rotated 90 degrees** — the wire buffer has 60-pixel rows. `dfr-play.py` transposes
+(`ffmpeg ...,transpose=1`). Solid fills and column-uniform patterns look correct either way,
+which is why the first colour-bar test passed despite the wrong layout.
+
+## Prior art — read these
+
+Two repos cover this same machine and go further:
+
+- **`sunplex07/appletbdrm`** — unified T1/T2 **DRM** driver (`/dev/dri/card*`), `ibridge-switcher`
+  + systemd for config 2, backlight via HID reports 3/4/5 on interface 6, DKMS install.
+  Note: it does **not** handle `apple-ibridge`, which force-selects config 1 and will fight it.
+- **`xeeban/macbook-t1-linux`** (`touch-bar/`) — same machine (MacBookPro13,2). Independently
+  found the same config-1 force-select root cause and the same `usb_device_driver` fix. Also has
+  **touch input** (multitouch digitizer on HID interrupt EP `0x83`, first 4 bytes = LE float32 X
+  in ~[0.5,1.0], read via hidraw alongside hid-generic, keys injected with uinput) and `dfrd/`,
+  a full userspace UI with FreeType labels and macOS-style layers.
+
 ## Still to do
 
 - draw something useful rather than a solid fill
