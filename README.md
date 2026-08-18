@@ -3,8 +3,9 @@
 Target: **MacBookPro13,2** (2016 13" Touch Bar), Apple **T1** iBridge, USB `05ac:8600`.
 Not T2. `tiny-dfr`, `appletbdrm` and `hid-appletb-*` are all T2-only and do nothing here.
 
-Status: **WORKING — arbitrary images and video.** Per-pixel control verified (gradients,
-colour bars), and 30fps video playback confirmed.
+Status: **WORKING — a usable Touch Bar.** Arbitrary images and 30fps video, plus a full
+function row: drawn icons over a gradient sampled from the desktop wallpaper, with
+**working buttons** (touch -> uinput key injection).
 
 ## Layout
 
@@ -109,6 +110,28 @@ continuously, which is also what holds the display session open.
 Anything ffmpeg can decode works:
 
     ffmpeg -i clip.mp4 -vf scale=2170:60 -f rawvideo -pix_fmt rgb24 - > /dev/dfr0
+
+## The bar UI
+
+    sudo bash scripts/dfr-bar-run.sh --flow 30      # start it (background)
+    sudo python3 scripts/dfr-bar.py --no-touch      # render only
+    sudo python3 scripts/dfr-bar.py --wallpaper X.jpg
+
+`dfr-bar.py` draws esc / brightness / mission-control / launchpad / keyboard-illum /
+prev-play-next / mute / volume as **vector icons** (font glyph coverage for emoji and media
+symbols is unreliable - they render as tofu), over a gradient built from the dominant colours
+of `~/.local/state/omarchy/current/background`. `--flow N` drifts the gradient N px/sec.
+
+Touch: the digitizer is a non-standard HID on **config-2 interface 2, EP 0x83**; reports are
+~52 bytes with a **little-endian float32 X in [0.5, 1.0]** in the first 4 bytes. Read via
+hidraw *alongside* `hid-generic` (no unbinding), mapped to key zones, injected with uinput.
+Protocol credit: `xeeban/macbook-t1-linux`.
+
+Two traps worth knowing:
+- **Under `sudo`, `~` is `/root`** - resolve the desktop user's home via `SUDO_USER`, or the
+  wallpaper silently falls back to a default palette.
+- **Never build frames pixel-by-pixel in Python.** 2170x60 per frame took seconds; making a
+  1-row image and letting Pillow `resize()` to full height is ~4 ms (~229 fps).
 
 ## Panel orientation
 
