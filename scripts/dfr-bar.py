@@ -45,9 +45,10 @@ WALL = os.path.join(_user_home(), ".local/state/omarchy/current/background")
 
 RELEASE_S = 0.12                 # no report for this long => finger up
 
+# Layer 0: the media/control strip. Layer 1: F1-F12 while Fn is held.
 # icon kind, evdev keycode, relative width. Icons are DRAWN, not glyphs -
 # font coverage for emoji/media symbols is unreliable (tofu boxes).
-KEYS = [
+KEYS_MEDIA = [
     ("esc",    1,   1.6),   # KEY_ESC
     ("bri-",   224, 1.0),   # KEY_BRIGHTNESSDOWN
     ("bri+",   225, 1.0),   # KEY_BRIGHTNESSUP
@@ -62,6 +63,18 @@ KEYS = [
     ("vol-",   114, 1.0),   # KEY_VOLUMEDOWN
     ("vol+",   115, 1.0),   # KEY_VOLUMEUP
 ]
+
+# Held-Fn layer: F1..F12. Same esc on the left so the layout does not jump.
+KEYS_FN = [("esc", 1, 1.6)] + [
+    (f"F{i}", code, 1.0) for i, code in enumerate(
+        [59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88], start=1)
+]
+
+LAYERS = [KEYS_MEDIA, KEYS_FN]
+KEYS = KEYS_MEDIA          # default; the render/touch paths take a layer arg
+
+# every keycode either layer can emit, so uinput advertises them all
+ALL_CODES = sorted({k[1] for layer in LAYERS for k in layer})
 
 
 # ---------------------------------------------------------------- palette
@@ -328,10 +341,11 @@ def watch_screen(state, period=3.0, threshold=18.0):
 
 # ---------------------------------------------------------------- drawing
 
-def key_extents():
-    total = sum(k[2] for k in KEYS)
+def key_extents(keys=None):
+    keys = keys if keys is not None else MEDIA_KEYS
+    total = sum(k[2] for k in keys)
     acc, out = 0.0, []
-    for _, _, wgt in KEYS:
+    for _, _, wgt in keys:
         x0 = int(acc / total * W + 0.5)
         acc += wgt
         x1 = int(acc / total * W + 0.5)
@@ -470,18 +484,19 @@ def panel_on():
     return ok
 
 
-def render(row, offset, pressed, font):
+def render(row, offset, pressed, font, keys=None):
     """row: a 1-row RGB image W wide. Rotate it, stretch to full height in C."""
     rowb = row.tobytes()
     o = (offset % W) * 3
     rowb = rowb[o:] + rowb[:o]
     img = Image.frombytes("RGB", (W, 1), rowb).resize((W, H), Image.NEAREST)
+    keys = keys if keys is not None else MEDIA_KEYS
     d = ImageDraw.Draw(img, "RGBA")
-    for i, (x0, x1) in enumerate(key_extents()):
+    for i, (x0, x1) in enumerate(key_extents(keys)):
         d.rounded_rectangle([x0 + 4, 5, x1 - 4, H - 6], radius=10,
                             fill=(0, 0, 0, 205 if i != pressed else 70),
                             outline=(255, 255, 255, 60), width=1)
-        draw_icon(d, KEYS[i][0], (x0 + x1) / 2, H / 2, font)
+        draw_icon(d, keys[i][0], (x0 + x1) / 2, H / 2, font)
     return img
 
 
@@ -496,7 +511,6 @@ def find_digitizer():
     """hidraw node on USB interface 2 of 05ac:8600 while in config 2"""
     for hr in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
         dev = os.path.realpath(os.path.join(hr, "device"))
-        # walk up to the USB interface directory
         p = dev
         for _ in range(6):
             inum = os.path.join(p, "bInterfaceNumber")
@@ -520,10 +534,52 @@ def find_digitizer():
     return None
 
 
+def find_keyboard():
+    """the internal keyboard event node that reports KEY_FN"""
+    import evdev
+    for p in sorted(glob.glob("/dev/input/event*")):
+        try:
+            d = evdev.InputDevice(p)
+        except Exception:
+            continue
+        if evdev.ecodes.KEY_FN in d.capabilities().get(evdev.ecodes.EV_KEY, []):
+            return p
+    return None
+
+
+def watch_fn(state, node):
+    """Hold Fn -> F-key layer; release -> media layer.
+
+    The Apple SPI keyboard autorepeats Fn (value 2) while held, so treat 1 and 2
+    as down and 0 as up. If a key is being touched when the layer flips, release
+    it first so the old layer's keycode cannot stick down.
+    """
+    import evdev, select
+    from evdev import ecodes
+    d = evdev.InputDevice(node)
+    print(f"fn: watching {node} ({d.name})")
+    while not state["stop"]:
+        r, _, _ = select.select([d], [], [], 0.5)
+        if not r:
+            continue
+        try:
+            events = list(d.read())
+        except OSError:
+            continue
+        for e in events:
+            if e.type != ecodes.EV_KEY or e.code != ecodes.KEY_FN:
+                continue
+            want = 1 if e.value in (1, 2) else 0
+            if want != state["layer"]:
+                state["layer"] = want
+                state["layer_changed"] = True
+                state["dirty"] = True
+
+
 def make_uinput():
     import evdev
     from evdev import UInput, ecodes
-    caps = {ecodes.EV_KEY: [k[1] for k in KEYS]}
+    caps = {ecodes.EV_KEY: ALL_CODES}
     return UInput(caps, name="Apple T1 Touch Bar")
 
 
@@ -532,7 +588,6 @@ def touch_loop(state, node):
     from evdev import ecodes
     ui = make_uinput()
     fd = os.open(node, os.O_RDONLY | os.O_NONBLOCK)
-    extents = key_extents()
     last = 0.0
     cur = None
     print(f"touch: reading {node}")
@@ -543,9 +598,19 @@ def touch_loop(state, node):
             except BlockingIOError:
                 data = b""
             now = time.time()
+            keys = LAYERS[state["layer"]]
+            extents = key_extents(keys)
+            if state.pop("layer_changed", False) and cur is not None:
+                # layer flipped while a finger was down - release the old key
+                ui.write(ecodes.EV_KEY, LAYERS[1 - state["layer"]][cur][1], 0)
+                ui.syn()
+                cur = None
+                state["pressed"] = -1
             if data and len(data) >= 4:
                 x = struct.unpack("<f", data[:4])[0]
                 if x >= 0.45:
+                    keys = LAYERS[state.get("layer", 0)]
+                    extents = key_extents(keys)
                     nx = max(0.0, min(0.99999, (x - 0.5) * 2.0))
                     idx = min(int(nx * W) , W - 1)
                     zone = 0
@@ -554,16 +619,16 @@ def touch_loop(state, node):
                             zone = i
                             break
                     last = now
-                    if cur != zone:
+                    if cur != (state.get("layer", 0), zone):
                         if cur is not None:
-                            ui.write(ecodes.EV_KEY, KEYS[cur][1], 0)
-                        ui.write(ecodes.EV_KEY, KEYS[zone][1], 1)
+                            ui.write(ecodes.EV_KEY, LAYERS[cur[0]][cur[1]][1], 0)
+                        ui.write(ecodes.EV_KEY, keys[zone][1], 1)
                         ui.syn()
-                        cur = zone
+                        cur = (state.get("layer", 0), zone)
                         state["pressed"] = zone
                         state["dirty"] = True
             elif cur is not None and now - last > RELEASE_S:
-                ui.write(ecodes.EV_KEY, KEYS[cur][1], 0)
+                ui.write(ecodes.EV_KEY, LAYERS[cur[0]][cur[1]][1], 0)
                 ui.syn()
                 cur = None
                 state["pressed"] = -1
@@ -611,7 +676,7 @@ def main():
                  "(sudo systemctl stop t1-touchbar-bar, or kill it first)")
     lockf.write(str(os.getpid())); lockf.flush()
 
-    state = {"pressed": -1, "dirty": True, "stop": False,
+    state = {"pressed": -1, "dirty": True, "stop": False, "layer": 0,
              "row_from": None, "row_to": None, "fade_t0": 0.0}
 
     def initial(src):
@@ -650,6 +715,12 @@ def main():
         threading.Thread(target=watch_screen, args=(state, poll, thresh),
                          daemon=True).start()
 
+    kbd = find_keyboard()
+    if kbd:
+        threading.Thread(target=watch_fn, args=(state, kbd), daemon=True).start()
+    else:
+        print("fn: no keyboard reporting KEY_FN - layer switching disabled")
+
     node = None if no_touch else find_digitizer()
     if node:
         threading.Thread(target=touch_loop, args=(state, node), daemon=True).start()
@@ -685,7 +756,8 @@ def main():
                     intro_t0 = None
 
             if state["dirty"] or state["fading"] or flow or intro < 1.0:
-                img = render(row, offset, state["pressed"], font)
+                img = render(row, offset, state["pressed"], font,
+                             LAYERS[state.get("layer", 0)])
                 if intro < 1.0:
                     img = Image.blend(black, img, intro)
                 dev.write(to_panel(img)); dev.flush()

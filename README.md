@@ -165,6 +165,12 @@ Getting the palette to look right took two fixes:
   most of the bar shows invented in-between shades. Each sampled colour now occupies ~55%% of
   its segment before a short smoothstep transition.
 
+**Fn layer**: hold Fn and the bar switches to F1-F12 and injects those keycodes; release and
+it returns to the media strip. The Apple SPI keyboard (`/dev/input/event5`) does report
+`KEY_FN`, but it **autorepeats while held** (value 2), so treat 1 and 2 as down and 0 as up.
+If the layer flips while a finger is down, the old layer's key is released first so it cannot
+stick. Reading the keyboard needs no root - the user is in the `input` group.
+
 Touch: the digitizer is a non-standard HID on **config-2 interface 2, EP 0x83**; reports are
 ~52 bytes with a **little-endian float32 X in [0.5, 1.0]** in the first 4 bytes. Read via
 hidraw *alongside* `hid-generic` (no unbinding), mapped to key zones, injected with uinput.
