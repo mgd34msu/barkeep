@@ -45,6 +45,12 @@ WALL = os.path.join(_user_home(), ".local/state/omarchy/current/background")
 
 RELEASE_S = 0.12                 # no report for this long => finger up
 
+# Idle behaviour: with no keyboard/mouse/bar activity the keys fade away and
+# leave just the gradient. Any input brings them back.
+IDLE_S     = 30.0                # quiet for this long => hide the keys
+IDLE_OUT_S = 2.0                 # fade them out over this
+IDLE_IN_S  = 1.0                 # and back in over this
+
 # Layer 0: the media/control strip. Layer 1: F1-F12 while Fn is held.
 # icon kind, evdev keycode, relative width. Icons are DRAWN, not glyphs -
 # font coverage for emoji/media symbols is unreliable (tofu boxes).
@@ -484,20 +490,29 @@ def panel_on():
     return ok
 
 
-def render(row, offset, pressed, font, keys=None):
-    """row: a 1-row RGB image W wide. Rotate it, stretch to full height in C."""
+def render(row, offset, pressed, font, keys=None, buttons=1.0):
+    """row: a 1-row RGB image W wide. Rotate it, stretch to full height in C.
+
+    buttons is the opacity of the whole key overlay, 0..1. Drawing the keys on
+    a copy of the gradient and blending the two is one C-speed composite - far
+    cheaper than trying to scale the alpha of every individual fill and icon,
+    and it fades the plates, outlines and glyphs together as one layer.
+    """
     rowb = row.tobytes()
     o = (offset % W) * 3
     rowb = rowb[o:] + rowb[:o]
-    img = Image.frombytes("RGB", (W, 1), rowb).resize((W, H), Image.NEAREST)
-    keys = keys if keys is not None else MEDIA_KEYS
+    bg = Image.frombytes("RGB", (W, 1), rowb).resize((W, H), Image.NEAREST)
+    if buttons <= 0.002:                 # fully idle - gradient only
+        return bg
+    img = bg if buttons >= 0.998 else bg.copy()
+    keys = keys if keys is not None else KEYS
     d = ImageDraw.Draw(img, "RGBA")
     for i, (x0, x1) in enumerate(key_extents(keys)):
         d.rounded_rectangle([x0 + 4, 5, x1 - 4, H - 6], radius=10,
                             fill=(0, 0, 0, 205 if i != pressed else 70),
                             outline=(255, 255, 255, 60), width=1)
         draw_icon(d, keys[i][0], (x0 + x1) / 2, H / 2, font)
-    return img
+    return img if buttons >= 0.998 else Image.blend(bg, img, buttons)
 
 
 def to_panel(img):
@@ -576,6 +591,59 @@ def watch_fn(state, node):
                 state["dirty"] = True
 
 
+def input_devices():
+    """Real keyboards and pointers - what counts as 'the user is here'.
+
+    Deliberately narrow. Power/Sleep/Lid/Video Bus all carry EV_KEY but are not
+    typing, and our own uinput node would let a bar tap wake itself through a
+    second path. Keyboard = has a letter key; pointer = EV_REL, or EV_ABS with
+    a touch/click button (that last one is the bar's own digitizer surface, so
+    touching the bar counts as activity too).
+    """
+    import evdev
+    from evdev import ecodes
+    out = []
+    for p in sorted(glob.glob("/dev/input/event*")):
+        try:
+            d = evdev.InputDevice(p)
+        except Exception:
+            continue
+        caps = d.capabilities()
+        keys = set(caps.get(ecodes.EV_KEY, []))
+        if d.name == "Apple T1 Touch Bar":            # our own injected keys
+            d.close(); continue
+        pointer = ecodes.EV_REL in caps or (
+            ecodes.EV_ABS in caps and
+            keys & {ecodes.BTN_TOUCH, ecodes.BTN_LEFT, ecodes.BTN_TOOL_FINGER})
+        if ecodes.KEY_A in keys or pointer:
+            out.append(d)
+        else:
+            d.close()
+    return out
+
+
+def watch_input(state):
+    """Any keypress or pointer movement refreshes state['last_input']."""
+    import evdev, select
+    from evdev import ecodes
+    devs = input_devices()
+    if not devs:
+        print("idle: no keyboard/pointer found - keys will stay visible")
+        return
+    print("idle: activity from " + ", ".join(d.name for d in devs))
+    fds = {d.fd: d for d in devs}
+    while not state["stop"]:
+        r, _, _ = select.select(list(fds), [], [], 0.5)
+        for fd in r:
+            try:
+                for e in fds[fd].read():
+                    if e.type in (ecodes.EV_KEY, ecodes.EV_REL, ecodes.EV_ABS):
+                        state["last_input"] = time.time()
+                        break
+            except OSError:
+                pass
+
+
 def make_uinput():
     import evdev
     from evdev import UInput, ecodes
@@ -619,6 +687,7 @@ def touch_loop(state, node):
                             zone = i
                             break
                     last = now
+                    state["last_input"] = now      # touching the bar wakes it
                     if cur != (state.get("layer", 0), zone):
                         if cur is not None:
                             ui.write(ecodes.EV_KEY, LAYERS[cur[0]][cur[1]][1], 0)
@@ -661,6 +730,13 @@ def main():
     poll = 3.0
     if "--poll" in args:
         i = args.index("--poll"); poll = float(args[i + 1]); del args[i:i + 2]
+    idle_s, idle_out_s, idle_in_s = IDLE_S, IDLE_OUT_S, IDLE_IN_S
+    if "--idle" in args:              # 0 disables the auto-hide entirely
+        i = args.index("--idle"); idle_s = float(args[i + 1]); del args[i:i + 2]
+    if "--idle-out" in args:
+        i = args.index("--idle-out"); idle_out_s = float(args[i + 1]); del args[i:i + 2]
+    if "--idle-in" in args:
+        i = args.index("--idle-in"); idle_in_s = float(args[i + 1]); del args[i:i + 2]
 
     if not os.path.exists(DEV):
         sys.exit(f"{DEV} missing - run scripts/dfr-up.sh first")
@@ -677,7 +753,8 @@ def main():
     lockf.write(str(os.getpid())); lockf.flush()
 
     state = {"pressed": -1, "dirty": True, "stop": False, "layer": 0,
-             "row_from": None, "row_to": None, "fade_t0": 0.0}
+             "row_from": None, "row_to": None, "fade_t0": 0.0,
+             "last_input": time.time(), "btn_p": 1.0}
 
     def initial(src):
         if src == "screen":
@@ -715,6 +792,11 @@ def main():
         threading.Thread(target=watch_screen, args=(state, poll, thresh),
                          daemon=True).start()
 
+    if idle_s > 0:
+        print(f"idle: keys fade out after {idle_s}s quiet "
+              f"(out {idle_out_s}s / in {idle_in_s}s)")
+        threading.Thread(target=watch_input, args=(state,), daemon=True).start()
+
     kbd = find_keyboard()
     if kbd:
         threading.Thread(target=watch_fn, args=(state, kbd), daemon=True).start()
@@ -740,10 +822,28 @@ def main():
     lit = True
     intro_t0 = time.time()
     period = 1.0 / 30
+    last_frame = time.time()
     try:
         while True:
             state["fading"] = False
             row = current_row(state, fade_s)
+            now = time.time()
+            dt, last_frame = now - last_frame, now
+
+            # Idle auto-hide. Ramp a phase 0..1 LINEARLY by elapsed time, then
+            # ease the phase for the actual opacity. Doing it this way means an
+            # interrupted fade reverses from exactly where it is - press a key
+            # halfway through the fade-out and the keys come back from half,
+            # with no jump - which a fixed start-time curve cannot do.
+            btn, btn_fading = 1.0, False
+            if idle_s > 0:
+                want = 1.0 if (now - state["last_input"]) < idle_s else 0.0
+                p = state["btn_p"]
+                step = dt / max(idle_in_s if want > p else idle_out_s, 1e-6)
+                p = min(want, p + step) if want > p else max(want, p - step)
+                state["btn_p"] = p
+                btn = p * p * (3 - 2 * p)          # same smoothstep as above
+                btn_fading = 0.0 < p < 1.0
             # Fade the WHOLE frame up from black on startup, using the same
             # eased curve as palette changes. The panel is lit while still
             # showing black, so there is no pop - it rises out of black.
@@ -755,9 +855,9 @@ def main():
                 else:
                     intro_t0 = None
 
-            if state["dirty"] or state["fading"] or flow or intro < 1.0:
+            if state["dirty"] or state["fading"] or flow or intro < 1.0 or btn_fading:
                 img = render(row, offset, state["pressed"], font,
-                             LAYERS[state.get("layer", 0)])
+                             LAYERS[state.get("layer", 0)], btn)
                 if intro < 1.0:
                     img = Image.blend(black, img, intro)
                 dev.write(to_panel(img)); dev.flush()

@@ -9,7 +9,11 @@
 # 'screen' is the default. At boot there may be no Wayland session yet, so the
 # first palette is seeded from theme/wallpaper - the screen watcher keeps trying
 # and takes over as soon as your session exists.
-DFR_ARGS="--source screen --flow 30 --fade 2 --poll 3 --threshold 18"
+# --idle 30       hide the keys after 30s with no keyboard, pointer or bar
+#                 activity, leaving just the gradient. 0 keeps them always on.
+# --idle-out 2    seconds to fade the keys away
+# --idle-in 1     seconds to bring them back
+DFR_ARGS="--source screen --flow 30 --fade 2 --poll 3 --threshold 18 --idle 30 --idle-out 2 --idle-in 1"
 
 # Desktop user whose session/theme/wallpaper is read (and whose Wayland
 # socket 'screen' sampling needs). Leave blank to auto-detect uid 1000.
