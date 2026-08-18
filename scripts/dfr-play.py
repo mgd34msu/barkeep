@@ -45,7 +45,12 @@ def gradient():
     out = bytearray()
     for ly in range(PH):                 # long axis = physical left..right
         t = ly / (PH - 1)
-        px = bytes((int(255 * t), int(255 * (1 - t)), int(128 + 127 * (t * 2 % 1))))
+        # smooth hue sweep across the bar, no discontinuities
+        import math
+        r = int(127.5 * (1 + math.cos(2 * math.pi * (t - 0.00))))
+        g = int(127.5 * (1 + math.cos(2 * math.pi * (t - 0.33))))
+        b = int(127.5 * (1 + math.cos(2 * math.pi * (t - 0.66))))
+        px = bytes((r, g, b))
         out += px * PW                   # constant across the short axis
     return bytes(out)
 
