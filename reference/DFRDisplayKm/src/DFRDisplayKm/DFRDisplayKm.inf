@@ -1,0 +1,94 @@
+;
+; DFRDisplayKm.inf: iBridge DFR USB composition and display driver
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=USBDevice
+ClassGuid={88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider=%ManufacturerName%
+CatalogFile=DFRDisplayKm.cat
+DriverVer=
+
+[DestinationDirs]
+DefaultDestDir = 12
+DFRDisplayKm_Device_CoInstaller_CopyFiles = 11
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+DFRDisplayKm.sys  = 1,,
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll=1
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%DFRDisplayKm.CompDeviceName% = DFRDisplayComposite_Install, USB\VID_05AC&PID_8302
+%DFRDisplayKm.CompDeviceName% = DFRDisplayComposite_Install, USB\VID_05AC&PID_8600
+%DFRDisplayKm.DeviceDesc% = DFRDisplayKm_Device, USB\VID_05AC&PID_8302&MI_01
+%DFRDisplayKm.DeviceDesc% = DFRDisplayKm_Device, USB\VID_05AC&PID_8600&MI_01
+
+; DFR Display Driver
+[DFRDisplayKm_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+DFRDisplayKm.sys
+
+[DFRDisplayKm_Device.NT.Services]
+AddService = DFRDisplayKm,%SPSVCINST_ASSOCSERVICE%, DFRDisplayKm_Service_Inst
+
+[DFRDisplayKm_Service_Inst]
+DisplayName    = %DFRDisplayKm.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\DFRDisplayKm.sys
+
+[DFRDisplayKm_Device.NT.CoInstallers]
+AddReg=DFRDisplayKm_Device_CoInstaller_AddReg
+CopyFiles=DFRDisplayKm_Device_CoInstaller_CopyFiles
+
+[DFRDisplayKm_Device_CoInstaller_AddReg]
+HKR,,CoInstallers32,0x00010000, "WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll,WdfCoInstaller"
+
+[DFRDisplayKm_Device_CoInstaller_CopyFiles]
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll
+
+[DFRDisplayKm_Device.NT.Wdf]
+KmdfService =  DFRDisplayKm, DFRDisplayKm_wdfsect
+
+[DFRDisplayKm_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+; Composition Device Driver
+[DFRDisplayComposite_Install]
+Include=usb.inf
+Needs=Composite.Dev.NT
+
+[DFRDisplayComposite_Install.Services]
+Include=usb.inf
+Needs=Composite.Dev.NT.Services
+
+[DFRDisplayComposite_Install.HW]
+AddReg=CompositeDev_AddReg
+
+[CompositeDev_AddReg]
+HKR,,FriendlyName,,%DFRDisplayKm.CompDeviceName%
+; Switch to the macOS iBridge display configuration
+HKR,,OriginalConfigurationValue,%REG_DWORD%,1
+
+[Strings]
+ManufacturerName="Bingxing Wang"
+ClassName="Universal Serial Bus devices"
+DiskName = "iBridge Display Installation Disk"
+
+DFRDisplayKm.DeviceDesc = "iBridge Display Device"
+DFRDisplayKm.SVCDESC = "iBridge Display Service"
+DFRDisplayKm.CompDeviceName="iBridge Display Composition Device"
+
+REG_MULTI_SZ = 0x00010000
+REG_DWORD = 0x00010001
+SPSVCINST_ASSOCSERVICE= 0x00000002
