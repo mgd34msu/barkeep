@@ -7,6 +7,7 @@
     dfr-play.py VIDEO.mp4            play video, looping (needs ffmpeg)
     dfr-play.py VIDEO.mp4 --once     play once
     dfr-play.py --fps 30 VIDEO.mp4
+    dfr-play.py --crop VIDEO.mp4     keep aspect, show a centre band (less aliasing)
 
 Panel is 2170x60 RGB888 = 390600 bytes per frame.
 """
@@ -19,6 +20,7 @@ PW, PH = H, W                     # panel buffer: 60 wide, 2170 tall
 FRAME = W * H * BPP
 DEV = "/dev/dfr0"
 ROT = 1                           # ffmpeg transpose mode (1=cw, 2=ccw)
+FIT = "squash"                    # squash | crop  (crop keeps aspect, shows a centre slice)
 
 
 def transpose_rgb(buf):
@@ -59,8 +61,14 @@ def bars():
 def ffmpeg_frames(path, fps):
     if not shutil.which("ffmpeg"):
         sys.exit("ffmpeg not found - install it, or use 'test'/'bars'")
+    if FIT == "crop":
+        # keep aspect: fill the width, then take a centre band 60px tall
+        vf = f"scale={W}:-1:flags=lanczos,crop={W}:{H}:(iw-{W})/2:(ih-{H})/2,transpose={ROT}"
+    else:
+        # squash to fit; lanczos + a light blur tames aliasing at 36:1
+        vf = f"scale={W}:{H}:flags=lanczos,transpose={ROT}"
     cmd = ["ffmpeg", "-loglevel", "error", "-i", path,
-           "-vf", f"scale={W}:{H}:flags=bilinear,transpose={ROT}", "-r", str(fps),
+           "-vf", vf, "-r", str(fps),
            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     while True:
@@ -76,7 +84,9 @@ def main():
     fps = 30
     once = "--once" in args
     if "--once" in args: args.remove("--once")
-    global ROT
+    global ROT, FIT
+    if "--crop" in args:
+        FIT = "crop"; args.remove("--crop")
     if "--rot" in args:
         i = args.index("--rot"); ROT = int(args[i+1]); del args[i:i+2]
     if "--fps" in args:
