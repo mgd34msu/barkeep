@@ -19,8 +19,10 @@ Colour source:
     --threshold N     ignore palette changes smaller than this (default 18)
     --fade N          seconds to cross-fade a palette change  (default 2)
     --flow N          drift the gradient sideways, px/sec. The bar is
-                      2170px, so 45 = one full loop every 48s. 30 is
-                      too slow to read as motion; 300 is frantic.
+                      2170px wide and the palette repeats once across it, so
+                      what you actually see is a colour band passing every
+                      (2170 / N / colours) seconds - at N=15 with ~6 colours,
+                      about every 24s. 300 is frantic.
 
 Idle auto-hide:
     --idle N          hide the keys after N seconds of no keyboard, pointer or
