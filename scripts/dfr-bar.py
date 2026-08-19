@@ -18,7 +18,9 @@ Colour source:
     --poll N          seconds between samples for 'screen'   (default 3)
     --threshold N     ignore palette changes smaller than this (default 18)
     --fade N          seconds to cross-fade a palette change  (default 2)
-    --flow N          drift the gradient sideways, px/sec     (default 0)
+    --flow N          drift the gradient sideways, px/sec. The bar is
+                      2170px, so 60 = one full loop every 36s. 30 is
+                      too slow to read as motion; 300 is frantic.
 
 Idle auto-hide:
     --idle N          hide the keys after N seconds of no keyboard, pointer or
@@ -74,6 +76,12 @@ IDLE_IN_S  = 1.0                 # and back in over this
 # is a HID feature report the firmware can lose over a real suspend, and only
 # userspace sends it, so on waking we re-issue it and fade back in from black.
 RESUME_GAP_S = 5.0
+
+# Frame rate while idle. The gradient keeps drifting when the keys are hidden -
+# it is the only thing left on the bar, so freezing it makes the bar look dead -
+# but it does not need 30fps to do it. The drift advances by elapsed time, so
+# the speed on screen is identical at either rate; there are just fewer frames.
+IDLE_FPS = 30.0
 
 
 def ease(t):
@@ -549,7 +557,7 @@ def render(row, offset, pressed, font, keys=None, buttons=1.0):
     and it fades the plates, outlines and glyphs together as one layer.
     """
     rowb = row.tobytes()
-    o = (offset % W) * 3
+    o = (int(offset) % W) * 3
     rowb = rowb[o:] + rowb[:o]
     bg = Image.frombytes("RGB", (W, 1), rowb).resize((W, H), Image.NEAREST)
     if buttons <= 0.002:                 # fully idle - gradient only
@@ -915,26 +923,28 @@ def main():
                 else:
                     intro_t0 = None
 
-            # Only draw when something is actually changing. `flow` used to be
-            # in this condition directly, so with the default --flow 30 it was
-            # permanently true and we rendered and pushed a full 390,600-byte
-            # frame every tick forever - which is where this process's CPU went.
-            # The gradient drift is also paused once the keys have faded out:
-            # nobody is watching a bar they have not touched in 30s, and a
-            # static bar costs nothing to hold, since the driver keeps
-            # re-sending the last frame on its own.
-            drifting = bool(flow) and btn > 0.002
-            if (state["dirty"] or state["fading"] or intro < 1.0
-                    or btn_fading or drifting):
+            # Draw when something is changing. `flow` used to sit in this
+            # condition directly, so with the default --flow 30 it was always
+            # true and we rendered and pushed a full 390,600-byte frame every
+            # tick forever - which is where this process's CPU went.
+            animating = (state["dirty"] or state["fading"] or intro < 1.0
+                         or btn_fading)
+            if animating or flow:
                 img = render(row, offset, state["pressed"], font,
                              LAYERS[state.get("layer", 0)], btn)
                 if intro < 1.0:
                     img = Image.blend(black, img, intro)
                 dev.write(to_panel(img)); dev.flush()
                 state["dirty"] = False
-            if drifting:
-                offset = (offset + max(1, int(flow / 30))) % W
-            time.sleep(period)
+            # Advance by ELAPSED TIME, not a fixed step per frame, so --flow is
+            # honestly px/sec and the drift runs at the same visible speed
+            # whichever rate we are rendering at.
+            if flow:
+                offset = (offset + flow * dt) % W
+            # Idle - keys hidden and nothing in transition - is the cheap case:
+            # keep drifting, just at fewer frames per second.
+            idle_now = btn <= 0.002 and not animating
+            time.sleep((1.0 / IDLE_FPS) if idle_now else period)
     except KeyboardInterrupt:
         print("\nstopped")
     finally:

@@ -130,6 +130,12 @@ struct dfr_ctx {
 	 * synchronously, which an unbounded resubmit-from-completion chain
 	 * never offered. */
 	struct delayed_work frame_work;
+	/* draw() builds every frame in the single shared fb_buf, so only one
+	 * may be in flight at a time. It used to be called solely from
+	 * frame_done(), which serialised it for free; now a write to /dev/dfr0
+	 * can also kick the work, and a second draw would overwrite fb_buf
+	 * while the first transfer is still reading out of it. */
+	bool frame_in_flight;
 	/* Every outbound URB is anchored so suspend can wait for the in-flight
 	 * ones to finish. The frame loop resubmits from its own completion
 	 * handler, so without this there is no point at which the traffic is
@@ -156,6 +162,8 @@ static void frame_done(struct urb *urb)
 	int st = urb->status;
 
 	usb_free_urb(urb);
+	if (ctx)
+		ctx->frame_in_flight = false;
 	if (st) {
 		pr_warn_ratelimited("dfr-probe: frame TX status %d\n", st);
 		return;
@@ -337,6 +345,8 @@ sent:
 		if (rc) {
 			usb_unanchor_urb(u);
 			usb_free_urb(u);
+		} else {
+			ctx->frame_in_flight = true;   /* cleared in frame_done */
 		}
 	}
 	if (!ctx->drew)
@@ -413,8 +423,8 @@ static void dfr_frame_work(struct work_struct *w)
 	struct dfr_ctx *ctx = container_of(to_delayed_work(w),
 					   struct dfr_ctx, frame_work);
 
-	if (ctx->stop)
-		return;
+	if (ctx->stop || ctx->frame_in_flight)
+		return;                 /* fb_buf is busy; frame_done requeues us */
 	fb_dirty = false;
 	draw(ctx);
 }
@@ -640,6 +650,7 @@ static int dfr_resume(struct usb_interface *intf)
 
 	pr_info("dfr-probe: resume - restarting the handshake\n");
 	ctx->stop = false;
+	ctx->frame_in_flight = false;
 	ctx->sent_ginf = false;
 	ctx->drew = false;
 	ctx->inited = false;
