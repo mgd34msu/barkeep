@@ -66,10 +66,15 @@ install_dkms() {
     clean_manual_modules
     for pair in "barkeep-cfgsel:barkeep-cfgsel" "barkeep-dfr:barkeep-dfr"; do
         src="${pair%%:*}"; name="${pair##*:}"
-        dkms status "$name/$VERSION" >/dev/null 2>&1 && {
-            warn "removing existing $name/$VERSION"
-            dkms remove "$name/$VERSION" --all >/dev/null 2>&1 || true
-        }
+        # Remove EVERY registered version, not just $VERSION: a version bump
+        # would otherwise leave the old one installed and autoinstalling.
+        dkms status "$name" 2>/dev/null | while read -r line; do
+            v=$(echo "$line" | sed -n "s|^$name[/,] *\([^,:]*\).*|\1|p")
+            [ -n "$v" ] || continue
+            warn "removing existing $name/$v"
+            dkms remove "$name/$v" --all >/dev/null 2>&1 || true
+        done
+        rm -rf /usr/src/${name}-*
         rm -rf "/usr/src/${name}-${VERSION}"
         mkdir -p "/usr/src/${name}-${VERSION}"
         cp "$SRC/$src"/*.c "$SRC/$src"/Makefile "$SRC/$src"/dkms.conf \
