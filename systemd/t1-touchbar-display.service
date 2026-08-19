@@ -5,7 +5,9 @@ Documentation=https://github.com/xeeban/macbook-t1-linux
 # that forms an ordering cycle and systemd silently drops the dependent job.
 After=systemd-udev-settle.service
 Wants=systemd-udev-settle.service
-ConditionPathExists=/sys/bus/usb/devices/1-3
+# Not a fixed sysfs path: the iBridge is 1-3 on a MacBookPro13,2, but that is
+# where the controller sits, not a property of the device. ExecCondition looks
+# it up by USB id and skips the unit cleanly (not "failed") if it is absent.
 # The old stock-function-row units run touchbar-rebind, which loads
 # apple-ibridge; appleib_hid_probe() then force-selects USB config 1 and kills
 # the display session. install.sh disables them, but declare it too so a manual
@@ -16,6 +18,7 @@ After=touchbar.service touchbar-resume.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+ExecCondition=/usr/local/lib/t1-touchbar/have-ibridge.sh
 ExecStart=/usr/local/lib/t1-touchbar/dfr-up.sh
 ExecStop=/usr/local/lib/t1-touchbar/dfr-reset.sh
 TimeoutStartSec=90

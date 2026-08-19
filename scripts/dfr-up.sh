@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Bring up the Touch Bar display session and leave it running.
 # Then push frames with:  scripts/dfr-play.py test | bars | FILE
-D=/sys/bus/usb/devices/1-3
+. "$(dirname "$0")/ibridge-common.sh"
+D=$(ibridge_path_or_die) || exit 1
 R="$(cd "$(dirname "$0")/.." && pwd)"
 for m in apple_ib_tb apple_ib_als apple_ibridge; do rmmod $m 2>/dev/null; done
 rmmod dfr_probe 2>/dev/null; rmmod ibridge_cfg 2>/dev/null

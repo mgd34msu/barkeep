@@ -2,7 +2,8 @@
 # Touch Bar bring-up with the byte-exact DFRDisplayKm frame format.
 #   sudo bash ~/dfr-go.sh          (log: /tmp/dfr-go.log)
 exec > >(tee /tmp/dfr-go.log) 2>&1
-D=/sys/bus/usb/devices/1-3
+. "$(dirname "$0")/ibridge-common.sh"
+D=$(ibridge_path_or_die) || exit 1
 P=/sys/module/dfr_probe/parameters
 
 echo "== 1. apple-ibridge OUT (appleib_hid_probe forces config 1 and kills the session) =="

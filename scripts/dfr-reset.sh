@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Undo everything, restore the stock function row.  sudo bash ~/dfr-reset.sh
-D=/sys/bus/usb/devices/1-3
+. "$(dirname "$0")/ibridge-common.sh"
+D=$(ibridge_path_or_die) || exit 1
 rmmod dfr_probe 2>/dev/null; rmmod ibridge_cfg 2>/dev/null
 [ "$(cat $D/bConfigurationValue 2>/dev/null)" != "1" ] && echo 1 > $D/bConfigurationValue && sleep 3
 echo on > $D/power/control 2>/dev/null

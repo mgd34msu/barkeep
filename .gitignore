@@ -10,3 +10,8 @@ dfr-probe/Module.symvers
 dfr-probe/modules.order
 *.mod
 *.mod.c
+__pycache__/
+*.pyc
+Module.symvers
+modules.order
+.module-common.o

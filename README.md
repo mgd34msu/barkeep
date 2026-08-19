@@ -19,6 +19,7 @@ and 30fps video — plus a full function row on top of it:
                    exposes /dev/dfr0
     scripts/       dfr-bar.py    the function-row UI (icons, touch, Fn, idle fade)
                    dfr-play.py   stills, video and test patterns
+                   ibridge-common.sh  locates the iBridge in sysfs by USB id
                    dfr-up.sh     bring the display session up
                    dfr-reset.sh  put the stock firmware row back, no reboot
                    dispon.py     panel enable on its own
@@ -103,6 +104,10 @@ Almost always `apple-ibridge` got loaded by something — see the legacy-units n
 
 **Nothing at all, `/dev/dfr0` missing.** The display unit failed to reach config 2:
 `journalctl -u t1-touchbar-display -b`. It prints `config=N (want 2)`.
+
+**The display unit is skipped, not failed.** Its `ExecCondition` found no `05ac:8600` in
+`/sys/bus/usb/devices/*`. The device is located by USB id, not by a fixed port, so this means
+the hardware genuinely is not there. `./install.sh status` prints the path it found.
 
 **"another dfr-bar is already running".** Two writers on `/dev/dfr0` fight and the bar
 flickers, so the UI takes an exclusive lock on `/run/dfr-bar.lock`. Stop the service before
@@ -308,9 +313,9 @@ in [0.5, 1.0]. They also independently found the same `apple-ibridge` config-1 r
 
 **`sunplex07/appletbdrm`** — nothing used here; listed below as prior art worth adopting.
 
-> The project itself has **no top-level LICENSE yet** — pick one before publishing. The
-> modules are already marked GPL-2.0 (`MODULE_LICENSE("GPL")` + SPDX), which constrains the
-> choice for `dfr-probe/` and `ibridge-cfg/`; the Python in `scripts/` is unconstrained.
+This project is **GPL-2.0** (see `LICENSE`) — the kernel modules are already marked as such
+via SPDX and `MODULE_LICENSE("GPL")`, and `scripts/` follows for consistency. MIT is
+GPL-compatible, so the derivation above is fine with the notice retained.
 
 ## Prior art — read these
 

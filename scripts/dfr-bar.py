@@ -1,16 +1,34 @@
 #!/usr/bin/env python3
 """dfr-bar — a working Touch Bar for the Apple T1.
 
-Draws the config-1 style function row on top of a gradient sampled from the
-desktop wallpaper, and makes the buttons actually work: reads the digitizer
-over hidraw and injects real keys via uinput.
-
-    sudo python3 dfr-bar.py                     # wallpaper gradient + buttons
-    sudo python3 dfr-bar.py --wallpaper X.jpg   # explicit image
-    sudo python3 dfr-bar.py --no-touch          # render only
-    sudo python3 dfr-bar.py --flow 40           # drift the gradient, px/sec
+Draws a function row over a colour gradient and makes the buttons actually
+work: reads the digitizer over hidraw and injects real keys via uinput. Hold Fn
+for F1-F12. The keys fade away when you stop using the machine.
 
 Requires the display session to be up (scripts/dfr-up.sh) so /dev/dfr0 exists.
+
+    sudo python3 dfr-bar.py                   # defaults
+    sudo python3 dfr-bar.py --source theme    # no screen capture at all
+    sudo python3 dfr-bar.py --no-touch        # render only, no key injection
+
+Colour source:
+    --source screen|theme|wallpaper   where the gradient comes from
+                                      (default: screen, sampled with grim)
+    --wallpaper PATH                  explicit image, implies --source wallpaper
+    --poll N          seconds between samples for 'screen'   (default 3)
+    --threshold N     ignore palette changes smaller than this (default 18)
+    --fade N          seconds to cross-fade a palette change  (default 2)
+    --flow N          drift the gradient sideways, px/sec     (default 0)
+
+Idle auto-hide:
+    --idle N          hide the keys after N seconds of no keyboard, pointer or
+                      bar activity. 0 disables.                (default 30)
+    --idle-out N      seconds to fade the keys away            (default 2)
+    --idle-in N       seconds to bring them back               (default 1)
+
+Other:
+    --no-touch        do not read the digitizer or inject keys
+    -h, --help        this text
 
 Touch protocol (T1, USB config 2): the digitizer is a non-standard HID on
 interface 2, EP 0x83. Reports are ~52 bytes; the first 4 are a little-endian
@@ -738,6 +756,9 @@ def touch_loop(state, node):
 
 def main():
     args = sys.argv[1:]
+    if "-h" in args or "--help" in args:
+        print(__doc__.strip())
+        return
     wall, no_touch, flow = WALL, False, 0.0
     source, fade_s = "screen", 2.0
     if "--wallpaper" in args:

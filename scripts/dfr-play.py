@@ -126,6 +126,9 @@ def ffmpeg_frames(path, fps):
 
 def main():
     args = [a for a in sys.argv[1:]]
+    if not args or "-h" in args or "--help" in args:
+        print(__doc__.strip())
+        return
     fps = 30
     speed = 200
     if "--speed" in args:

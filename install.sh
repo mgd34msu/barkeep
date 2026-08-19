@@ -6,6 +6,7 @@
 set -u
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SRC/scripts/ibridge-common.sh"
 LIBDIR=/usr/local/lib/t1-touchbar
 CFGDIR=/etc/t1-touchbar
 UNITS=(t1-touchbar-display.service t1-touchbar-bar.service t1-touchbar-resume.service)
@@ -29,7 +30,8 @@ die()  { echo -e "${R}[x]${N} $*"; exit 1; }
 need_root() { [ "$EUID" -eq 0 ] || die "run as root: sudo $0 ${1:-install}"; }
 
 check_hw() {
-    grep -qs 8600 /sys/bus/usb/devices/*/idProduct 2>/dev/null \
+    local d
+    d=$(ibridge_path) && info "found Apple iBridge at $d" \
         || warn "no Apple iBridge (05ac:8600) found - is this a T1 MacBook?"
 }
 
@@ -85,14 +87,23 @@ install_files() {
     install -m755 "$SRC/scripts/dfr-bar.py"   "$LIBDIR/"
     install -m755 "$SRC/scripts/dfr-play.py"  "$LIBDIR/"
     install -m755 "$SRC/scripts/dispon.py"    "$LIBDIR/"
-    # path-independent copies of the bring-up/teardown scripts
-    sed "s#^R=.*#R=$LIBDIR#; s#\"\$R/ibridge-cfg/ibridge-cfg.ko\"#modprobe ibridge_cfg#" \
-        "$SRC/scripts/dfr-up.sh" > "$LIBDIR/dfr-up.sh.tmp" 2>/dev/null || true
-    # simpler: generate them fresh against the DKMS-installed modules
-    cat > "$LIBDIR/dfr-up.sh" <<'EOS'
+    install -m644 "$SRC/scripts/ibridge-common.sh" "$LIBDIR/"
+    # systemd ExecCondition: skip the unit cleanly (not "failed") on a machine
+    # that has no iBridge, e.g. a shared config or the wrong Mac.
+    cat > "$LIBDIR/have-ibridge.sh" <<EOS
+#!/usr/bin/env bash
+. "$LIBDIR/ibridge-common.sh"
+ibridge_path >/dev/null
+EOS
+    # The bring-up/teardown scripts are generated fresh here so they run against
+    # the DKMS-installed modules rather than a source tree that may move.
+    cat > "$LIBDIR/dfr-up.sh" <<EOS
 #!/usr/bin/env bash
 # Bring up the Touch Bar display session (USB configuration 2).
-D=/sys/bus/usb/devices/1-3
+. "$LIBDIR/ibridge-common.sh"
+D=\$(ibridge_path_or_die) || exit 1
+EOS
+    cat >> "$LIBDIR/dfr-up.sh" <<'EOS'
 for m in apple_ib_tb apple_ib_als apple_ibridge; do rmmod $m 2>/dev/null; done
 rmmod dfr_probe 2>/dev/null; rmmod ibridge_cfg 2>/dev/null
 modprobe ibridge_cfg config=1 || exit 1
@@ -110,12 +121,15 @@ echo "config=$cfg (want 2)"
 # UI instead of flashing the module's placeholder fill first.
 echo "display session up (panel lit by the UI)"
 EOS
-    cat > "$LIBDIR/dfr-reset.sh" <<'EOS'
+    cat > "$LIBDIR/dfr-reset.sh" <<EOS
 #!/usr/bin/env bash
 # Restore the stock firmware function row. Every step is time-bounded: this
 # runs as ExecStop, and anything that hangs here gets SIGTERMed half-done and
 # leaves the panel dark.
-D=/sys/bus/usb/devices/1-3
+. "$LIBDIR/ibridge-common.sh"
+D=\$(ibridge_path) || exit 0
+EOS
+    cat >> "$LIBDIR/dfr-reset.sh" <<'EOS'
 pkill -f dfr-bar.py 2>/dev/null
 sleep 1
 timeout 10 rmmod dfr_probe 2>/dev/null
@@ -131,8 +145,7 @@ timeout 15 modprobe apple-ib-als  2>/dev/null
 [ -x /usr/local/bin/touchbar-rebind ] && timeout 30 /usr/local/bin/touchbar-rebind >/dev/null 2>&1
 echo "config=$(timeout 5 cat $D/bConfigurationValue 2>/dev/null)"
 EOS
-    rm -f "$LIBDIR/dfr-up.sh.tmp"
-    chmod 755 "$LIBDIR/dfr-up.sh" "$LIBDIR/dfr-reset.sh"
+    chmod 755 "$LIBDIR/dfr-up.sh" "$LIBDIR/dfr-reset.sh" "$LIBDIR/have-ibridge.sh"
     [ -f "$CFGDIR/config" ] && warn "keeping existing $CFGDIR/config" \
                             || install -m644 "$SRC/etc/config" "$CFGDIR/config"
     # convenience CLI
@@ -236,9 +249,11 @@ do_status() {
         ac=$(systemctl is-active  "$u" 2>/dev/null | head -1); ac=${ac:--}
         printf "  %-32s %s / %s\n" "$u" "$en" "$ac"
     done
-    local D=/sys/bus/usb/devices/1-3
+    local D
+    D=$(ibridge_path) || D=""
     echo "device:"
-    echo "  config=$(cat $D/bConfigurationValue 2>/dev/null || echo '?') (2 = display mode)"
+    echo "  path=${D:-not found}"
+    echo "  config=$(cat "$D/bConfigurationValue" 2>/dev/null || echo '?') (2 = display mode)"
     echo "  /dev/dfr0 $([ -e /dev/dfr0 ] && echo present || echo missing)"
     for u in "${LEGACY[@]}"; do
         [ "$(systemctl is-enabled "$u" 2>/dev/null)" = "enabled" ] && \
