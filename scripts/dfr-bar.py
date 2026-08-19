@@ -93,36 +93,69 @@ def ease(t):
     t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
     return t * t * (3 - 2 * t)
 
-# Layer 0: the media/control strip. Layer 1: F1-F12 while Fn is held.
-# icon kind, evdev keycode, relative width. Icons are DRAWN, not glyphs -
-# font coverage for emoji/media symbols is unreliable (tofu boxes).
+# A key is a record, not a bare tuple: besides injecting a keycode it may run
+# a command in the desktop session, or carry a live indicator whose label is
+# recomputed from /sys. Icons are DRAWN, not glyphs - font coverage for emoji
+# and media symbols is unreliable (tofu boxes).
+def K(kind, code=0, w=1.0, cmd=None, ind=None):
+    return {"kind": kind, "code": code, "w": w, "cmd": cmd, "ind": ind}
+
+
 KEYS_MEDIA = [
-    ("esc",    1,   1.6),   # KEY_ESC
-    ("bri-",   224, 1.0),   # KEY_BRIGHTNESSDOWN
-    ("bri+",   225, 1.0),   # KEY_BRIGHTNESSUP
-    ("grid",   120, 1.0),   # KEY_SCALE      (mission control)
-    ("apps",   204, 1.0),   # KEY_DASHBOARD  (launchpad)
-    ("kb-",    229, 1.0),   # KEY_KBDILLUMDOWN
-    ("kb+",    230, 1.0),   # KEY_KBDILLUMUP
-    ("prev",   165, 1.0),   # KEY_PREVIOUSSONG
-    ("play",   164, 1.0),   # KEY_PLAYPAUSE
-    ("next",   163, 1.0),   # KEY_NEXTSONG
-    ("mute",   113, 1.0),   # KEY_MUTE
-    ("vol-",   114, 1.0),   # KEY_VOLUMEDOWN
-    ("vol+",   115, 1.0),   # KEY_VOLUMEUP
+    K("esc",  1,   1.6),    # KEY_ESC
+    K("bri-", 224),         # KEY_BRIGHTNESSDOWN
+    K("bri+", 225),         # KEY_BRIGHTNESSUP
+    K("grid", 120),         # KEY_SCALE      (mission control)
+    K("apps", 204),         # KEY_DASHBOARD  (launchpad)
+    K("kb-",  229),         # KEY_KBDILLUMDOWN
+    K("kb+",  230),         # KEY_KBDILLUMUP
+    K("prev", 165),         # KEY_PREVIOUSSONG
+    K("play", 164),         # KEY_PLAYPAUSE
+    K("next", 163),         # KEY_NEXTSONG
+    K("mute", 113),         # KEY_MUTE
+    K("vol-", 114),         # KEY_VOLUMEDOWN
+    K("vol+", 115),         # KEY_VOLUMEUP
 ]
 
-# Held-Fn layer: F1..F12. Same esc on the left so the layout does not jump.
-KEYS_FN = [("esc", 1, 1.6)] + [
-    (f"F{i}", code, 1.0) for i, code in enumerate(
+# Hold Fn: F1-F12. Same esc on the left so the layout does not jump.
+KEYS_FN = [K("esc", 1, 1.6)] + [
+    K(f"F{i}", code) for i, code in enumerate(
         [59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88], start=1)
 ]
 
-LAYERS = [KEYS_MEDIA, KEYS_FN]
+# Ctrl+Fn: live system row. Labels come from /sys; a tap opens the matching
+# settings page rather than injecting a key.
+KEYS_SYS = [
+    K("esc", 1, 1.6),
+    K("kbd",  w=1.6, ind="kbd",  cmd="omarchy-menu toggle"),
+    K("batt", w=1.6, ind="batt", cmd="omarchy-menu toggle"),
+    K("wifi", w=1.6, ind="wifi", cmd="omarchy-menu toggle"),
+    K("bt",   w=1.6, ind="bt",   cmd="omarchy-bluetooth-device"),
+    K("bar-", w=1.0, cmd="__bar_dim"),      # handled internally: bar backlight
+    K("bar+", w=1.0, cmd="__bar_bright"),
+    K("auto", w=1.0, cmd="__bar_auto"),
+]
+
+# Alt+Fn: F13-F24. Unbound by default - bind them in your compositor.
+KEYS_F13 = [K("esc", 1, 1.6)] + [
+    K(f"F{i}", code) for i, code in enumerate(
+        [183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194], start=13)
+]
+
+# Meta+Fn: transport only, big targets.
+KEYS_XPORT = [
+    K("esc",  1, 1.6),
+    K("prev", 165, 2.0), K("play", 164, 2.4), K("next", 163, 2.0),
+    K("mute", 113, 1.6), K("vol-", 114, 1.6), K("vol+", 115, 1.6),
+]
+
+# Index order must match layer_for() below.
+LAYERS = [KEYS_MEDIA, KEYS_FN, KEYS_SYS, KEYS_F13, KEYS_XPORT]
+LAYER_NAMES = ["media", "fn", "system", "f13-f24", "transport"]
 KEYS = KEYS_MEDIA          # default; the render/touch paths take a layer arg
 
-# every keycode either layer can emit, so uinput advertises them all
-ALL_CODES = sorted({k[1] for layer in LAYERS for k in layer})
+# every keycode any layer can emit, so uinput advertises them all
+ALL_CODES = sorted({k["code"] for layer in LAYERS for k in layer if k["code"]})
 
 
 # ---------------------------------------------------------------- palette
@@ -386,6 +419,15 @@ def palette_distance(a, b):
             sum(near(c, a) for c in b) / len(b)) / 2
 
 
+def initial_palette(src, wall):
+    if src == "screen":
+        return screen_palette(), "screen"
+    if src == "wallpaper":
+        return wallpaper_palette(wall), "wallpaper " + os.path.basename(
+            os.path.realpath(wall))
+    return theme_palette(), "theme"
+
+
 def watch_screen(state, period=3.0, threshold=18.0):
     """Track the colours on screen and cross-fade when they actually shift.
 
@@ -408,10 +450,10 @@ def watch_screen(state, period=3.0, threshold=18.0):
 # ---------------------------------------------------------------- drawing
 
 def key_extents(keys=None):
-    keys = keys if keys is not None else MEDIA_KEYS
-    total = sum(k[2] for k in keys)
+    keys = keys if keys is not None else KEYS
+    total = sum(k["w"] for k in keys)
     acc, out = 0.0, []
-    for _, _, wgt in keys:
+    for wgt in (k["w"] for k in keys):
         x0 = int(acc / total * W + 0.5)
         acc += wgt
         x1 = int(acc / total * W + 0.5)
@@ -422,7 +464,7 @@ def key_extents(keys=None):
 FG = (255, 255, 255, 255)
 
 
-def draw_icon(d, kind, cx, cy, font):
+def draw_icon(d, kind, cx, cy, font, val=None):
     """vector icons - no font coverage worries"""
     def sun(scale, dx=0):
         r = 7 * scale
@@ -449,11 +491,12 @@ def draw_icon(d, kind, cx, cy, font):
             r = 6 + i * 5
             d.arc([x + 1 - r, cy - r, x + 1 + r, cy + r], -55, 55, fill=FG, width=2)
 
-    def text(label, size=22):
+    def text(label, size=22, dx=0):
         f = font
         try:
             bb = d.textbbox((0, 0), label, font=f)
-            d.text((cx - (bb[2] - bb[0]) / 2 - bb[0], cy - (bb[3] - bb[1]) / 2 - bb[1]),
+            d.text((cx + dx - (bb[2] - bb[0]) / 2 - bb[0],
+                    cy - (bb[3] - bb[1]) / 2 - bb[1]),
                    label, font=f, fill=FG)
         except Exception:
             pass
@@ -500,6 +543,54 @@ def draw_icon(d, kind, cx, cy, font):
         speaker(1, dx=-10); plusminus(-1, 22)
     elif kind == "vol+":
         speaker(2, dx=-12); plusminus(1, 26)
+    elif kind == "batt":
+        # body + terminal, filled proportionally to charge
+        x0, x1, y0, y1 = cx - 46, cx - 20, cy - 8, cy + 8
+        d.rounded_rectangle([x0, y0, x1, y1], radius=3, outline=FG, width=2)
+        d.rectangle([x1 + 1, cy - 3, x1 + 4, cy + 3], fill=FG)
+        pct = (val or 0) if isinstance(val, int) else 0
+        if pct > 0:
+            w = int((x1 - x0 - 6) * pct / 100.0)
+            d.rectangle([x0 + 3, y0 + 3, x0 + 3 + w, y1 - 3], fill=FG)
+        text(f"{pct}%", dx=18)
+    elif kind == "wifi":
+        # three arcs; hollow when down
+        for i, r in enumerate((6, 13, 20)):
+            box = [cx - 18 - r + 18, cy + 4 - r, cx - 18 + r + 18, cy + 4 + r]
+            d.arc(box, start=215, end=325, fill=FG,
+                  width=3 if val else 1)
+        d.ellipse([cx + 16, cy + 1, cx + 21, cy + 6], fill=FG if val else None,
+                  outline=FG)
+    elif kind == "bt":
+        # the runic bluetooth mark
+        # One continuous stroke, the way the real mark is built:
+        # upper-left -> lower-right -> bottom -> up the stem -> top ->
+        # upper-right -> lower-left. The two wings sit on the RIGHT of the
+        # stem and the long diagonals cross it.
+        w = 3 if val else 2
+        d.line([(cx - 9, cy - 7), (cx + 9, cy + 7), (cx, cy + 15),
+                (cx, cy - 15), (cx + 9, cy - 7), (cx - 9, cy + 7)],
+               fill=FG, width=w, joint="curve")
+        if not val:
+            d.line([cx - 14, cy + 13, cx + 14, cy - 13], fill=FG, width=2)
+    elif kind == "kbd":
+        d.rounded_rectangle([cx - 46, cy - 9, cx - 20, cy + 7], radius=3,
+                            outline=FG, width=2)
+        for r in range(2):
+            for c in range(4):
+                x = cx - 42 + c * 6
+                y = cy - 5 + r * 6
+                d.rectangle([x, y, x + 2, y + 2], fill=FG)
+        text(f"{val}%" if isinstance(val, int) else "kbd", dx=18)
+    elif kind in ("bar-", "bar+"):
+        # a little touch bar, filled more for "+", with the sign beside it
+        d.rounded_rectangle([cx - 26, cy - 7, cx + 2, cy + 7], radius=3,
+                            outline=FG, width=2)
+        d.rectangle([cx - 23, cy - 4, cx + (-1 if kind == "bar+" else -15), cy + 4],
+                    fill=FG)
+        plusminus(1 if kind == "bar+" else -1, 16)
+    elif kind == "auto":
+        text("AUTO")
     else:
         text(kind)
 
@@ -550,7 +641,7 @@ def panel_on():
     return ok
 
 
-def render(row, offset, pressed, font, keys=None, buttons=1.0):
+def render(row, offset, pressed, font, keys=None, buttons=1.0, ind=None):
     """row: a 1-row RGB image W wide. Rotate it, stretch to full height in C.
 
     buttons is the opacity of the whole key overlay, 0..1. Drawing the keys on
@@ -566,12 +657,17 @@ def render(row, offset, pressed, font, keys=None, buttons=1.0):
         return bg
     img = bg if buttons >= 0.998 else bg.copy()
     keys = keys if keys is not None else KEYS
+    ind = ind or {}
     d = ImageDraw.Draw(img, "RGBA")
     for i, (x0, x1) in enumerate(key_extents(keys)):
         d.rounded_rectangle([x0 + 4, 5, x1 - 4, H - 6], radius=10,
                             fill=(0, 0, 0, 205 if i != pressed else 70),
                             outline=(255, 255, 255, 60), width=1)
-        draw_icon(d, keys[i][0], (x0 + x1) / 2, H / 2, font)
+        k = keys[i]
+        val = ind.get(k["ind"]) if k.get("ind") else None
+        if k.get("ind") == "batt" and isinstance(val, tuple):
+            val = val[0]                       # (percent, status) -> percent
+        draw_icon(d, k["kind"], (x0 + x1) / 2, H / 2, font, val)
     return img if buttons >= 0.998 else Image.blend(bg, img, buttons)
 
 
@@ -622,8 +718,21 @@ def find_keyboard():
     return None
 
 
+def layer_for(fn, ctrl, alt, meta):
+    """Which layer the current modifier combination selects."""
+    if not fn:
+        return 0                        # media
+    if ctrl:
+        return 2                        # live system row
+    if alt:
+        return 3                        # F13-F24
+    if meta:
+        return 4                        # transport
+    return 1                            # F1-F12
+
+
 def watch_fn(state, node):
-    """Hold Fn -> F-key layer; release -> media layer.
+    """Fn (plus a modifier) chooses the layer; releasing Fn returns to media.
 
     The Apple SPI keyboard autorepeats Fn (value 2) while held, so treat 1 and 2
     as down and 0 as up. If a key is being touched when the layer flips, release
@@ -632,7 +741,11 @@ def watch_fn(state, node):
     import evdev, select
     from evdev import ecodes
     d = evdev.InputDevice(node)
-    print(f"fn: watching {node} ({d.name})")
+    print(f"fn: watching {node} ({d.name}) - Fn / Ctrl+Fn / Alt+Fn / Meta+Fn")
+    CTRL = {ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL}
+    ALT  = {ecodes.KEY_LEFTALT,  ecodes.KEY_RIGHTALT}
+    META = {ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA}
+    held = {"fn": False, "ctrl": False, "alt": False, "meta": False}
     while not state["stop"]:
         r, _, _ = select.select([d], [], [], 0.5)
         if not r:
@@ -641,14 +754,144 @@ def watch_fn(state, node):
             events = list(d.read())
         except OSError:
             continue
+        changed = False
         for e in events:
-            if e.type != ecodes.EV_KEY or e.code != ecodes.KEY_FN:
+            if e.type != ecodes.EV_KEY:
                 continue
-            want = 1 if e.value in (1, 2) else 0
-            if want != state["layer"]:
-                state["layer"] = want
-                state["layer_changed"] = True
-                state["dirty"] = True
+            down = e.value in (1, 2)        # 2 = autorepeat, still held
+            if e.code == ecodes.KEY_FN:
+                held["fn"] = down; changed = True
+            elif e.code in CTRL:
+                held["ctrl"] = down; changed = True
+            elif e.code in ALT:
+                held["alt"] = down; changed = True
+            elif e.code in META:
+                held["meta"] = down; changed = True
+        if not changed:
+            continue
+        want = layer_for(held["fn"], held["ctrl"], held["alt"], held["meta"])
+        if want != state["layer"]:
+            state["layer"] = want
+            state["layer_changed"] = True
+            state["dirty"] = True
+
+
+def _first(pattern, name):
+    for d in sorted(glob.glob(pattern)):
+        try:
+            return open(os.path.join(d, name)).read().strip()
+        except Exception:
+            continue
+    return None
+
+
+def read_indicators():
+    """Live values for the system layer, straight out of /sys - no daemons.
+
+    Every field is optional: a machine without a battery or an rfkill node
+    just gets None and the key renders as a plain icon.
+    """
+    out = {}
+    cap = _first("/sys/class/power_supply/BAT*", "capacity")
+    st  = _first("/sys/class/power_supply/BAT*", "status")
+    if cap is not None:
+        out["batt"] = (int(cap), (st or "").lower())
+
+    # wifi: an operstate of "up" on a wireless interface
+    for d in sorted(glob.glob("/sys/class/net/*")):
+        if not os.path.isdir(os.path.join(d, "wireless")):
+            continue
+        try:
+            out["wifi"] = open(os.path.join(d, "operstate")).read().strip() == "up"
+        except Exception:
+            pass
+        break
+
+    # bluetooth: rfkill says whether the radio is blocked
+    for d in sorted(glob.glob("/sys/class/rfkill/rfkill*")):
+        try:
+            if open(os.path.join(d, "type")).read().strip() != "bluetooth":
+                continue
+            soft = open(os.path.join(d, "soft")).read().strip()
+            hard = open(os.path.join(d, "hard")).read().strip()
+            out["bt"] = (soft == "0" and hard == "0")
+        except Exception:
+            pass
+        break
+
+    # keyboard backlight as a percentage of its own maximum
+    for d in sorted(glob.glob("/sys/class/leds/*kbd_backlight*")):
+        try:
+            cur = int(open(os.path.join(d, "brightness")).read().strip())
+            mx  = int(open(os.path.join(d, "max_brightness")).read().strip()) or 1
+            out["kbd"] = int(cur * 100 / mx)
+        except Exception:
+            pass
+        break
+    return out
+
+
+def watch_indicators(state, period=2.5):
+    while not state["stop"]:
+        try:
+            new = read_indicators()
+            if new != state.get("ind"):
+                state["ind"] = new
+                # only forces a redraw when the system layer is on screen
+                if LAYERS[state.get("layer", 0)] is KEYS_SYS:
+                    state["dirty"] = True
+        except Exception as e:
+            print("indicators failed:", e)
+        time.sleep(period)
+
+
+def run_as_user(cmd):
+    """Run a command in the desktop user's session (never as root)."""
+    import subprocess, pwd
+    try:
+        pw = pwd.getpwuid(1000)
+        for name in (os.environ.get("SUDO_USER"), os.environ.get("DFR_USER")):
+            if name:
+                pw = pwd.getpwnam(name)
+                break
+    except KeyError:
+        return
+    env = dict(os.environ)
+    env.update({"HOME": pw.pw_dir, "USER": pw.pw_name, "LOGNAME": pw.pw_name,
+                "XDG_RUNTIME_DIR": f"/run/user/{pw.pw_uid}"})
+    env.pop("SUDO_USER", None)
+    try:
+        subprocess.Popen(
+            ["setpriv", "--reuid", str(pw.pw_uid), "--regid", str(pw.pw_gid),
+             "--init-groups", "--inh-caps=-all", "/bin/sh", "-c", cmd],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+    except Exception as e:
+        print("command failed:", e)
+
+
+def do_action(state, key):
+    """A key with `cmd` runs something instead of injecting a keycode."""
+    cmd = key.get("cmd")
+    if not cmd:
+        return False
+    if cmd.startswith("__bar_"):                 # bar backlight, handled here
+        try:
+            import t1hid
+            if cmd == "__bar_auto":
+                t1hid.set_auto(True)
+                print("bar backlight: ALS auto")
+            else:
+                step = 15 if cmd == "__bar_bright" else -15
+                pct = max(0, min(100, state.get("bar_pct", 60) + step))
+                state["bar_pct"] = pct
+                t1hid.set_percent(pct)
+                print(f"bar backlight: {pct}%")
+        except Exception as e:
+            print("bar backlight failed:", e)
+        return True
+    run_as_user(cmd)
+    return True
 
 
 def input_devices():
@@ -730,8 +973,10 @@ def touch_loop(state, node):
             extents = key_extents(keys)
             if state.pop("layer_changed", False) and cur is not None:
                 # layer flipped while a finger was down - release the old key
-                ui.write(ecodes.EV_KEY, LAYERS[1 - state["layer"]][cur][1], 0)
-                ui.syn()
+                old = LAYERS[cur[0]][cur[1]]
+                if old["code"]:
+                    ui.write(ecodes.EV_KEY, old["code"], 0)
+                    ui.syn()
                 cur = None
                 state["pressed"] = -1
             if data and len(data) >= 4:
@@ -750,15 +995,23 @@ def touch_loop(state, node):
                     state["last_input"] = now      # touching the bar wakes it
                     if cur != (state.get("layer", 0), zone):
                         if cur is not None:
-                            ui.write(ecodes.EV_KEY, LAYERS[cur[0]][cur[1]][1], 0)
-                        ui.write(ecodes.EV_KEY, keys[zone][1], 1)
+                            prev = LAYERS[cur[0]][cur[1]]
+                            if prev["code"]:
+                                ui.write(ecodes.EV_KEY, prev["code"], 0)
+                        k = keys[zone]
+                        # A command key acts once on touch-down; a normal key
+                        # injects press now and release when the finger lifts.
+                        if not do_action(state, k) and k["code"]:
+                            ui.write(ecodes.EV_KEY, k["code"], 1)
                         ui.syn()
                         cur = (state.get("layer", 0), zone)
                         state["pressed"] = zone
                         state["dirty"] = True
             elif cur is not None and now - last > RELEASE_S:
-                ui.write(ecodes.EV_KEY, LAYERS[cur[0]][cur[1]][1], 0)
-                ui.syn()
+                done = LAYERS[cur[0]][cur[1]]
+                if done["code"]:
+                    ui.write(ecodes.EV_KEY, done["code"], 0)
+                    ui.syn()
                 cur = None
                 state["pressed"] = -1
                 state["dirty"] = True
@@ -793,6 +1046,17 @@ def main():
     poll = 3.0
     if "--poll" in args:
         i = args.index("--poll"); poll = float(args[i + 1]); del args[i:i + 2]
+    preview, preview_layer = None, 0
+    if "--preview" in args:
+        i = args.index("--preview"); preview = args[i + 1]; del args[i:i + 2]
+    if "--preview-layer" in args:
+        i = args.index("--preview-layer")
+        name = args[i + 1]; del args[i:i + 2]
+        preview_layer = (LAYER_NAMES.index(name) if name in LAYER_NAMES
+                         else int(name))
+    bar_pct = None
+    if "--bar-brightness" in args:
+        i = args.index("--bar-brightness"); bar_pct = args[i + 1]; del args[i:i + 2]
     idle_s, idle_out_s, idle_in_s = IDLE_S, IDLE_OUT_S, IDLE_IN_S
     if "--idle" in args:              # 0 disables the auto-hide entirely
         i = args.index("--idle"); idle_s = float(args[i + 1]); del args[i:i + 2]
@@ -800,6 +1064,20 @@ def main():
         i = args.index("--idle-out"); idle_out_s = float(args[i + 1]); del args[i:i + 2]
     if "--idle-in" in args:
         i = args.index("--idle-in"); idle_in_s = float(args[i + 1]); del args[i:i + 2]
+
+    if preview:
+        # Offline render: no /dev/dfr0, no root, no panel. Lets the layout and
+        # icons be iterated on without touching the hardware at all.
+        try:
+            cols, why = initial_palette(source, wall)
+        except Exception as e:
+            print(f"palette unavailable ({e}); using the builtin")
+            cols, why = [(137, 180, 250), (203, 166, 247), (166, 227, 161)], "builtin"
+        img = render(strip_row(cols), 0, -1, find_font(26),
+                     LAYERS[preview_layer], 1.0, read_indicators())
+        img.save(preview)
+        print(f"{preview}: {LAYER_NAMES[preview_layer]} layer, palette from {why}")
+        return
 
     if not os.path.exists(DEV):
         sys.exit(f"{DEV} missing - run scripts/dfr-up.sh first")
@@ -817,15 +1095,11 @@ def main():
 
     state = {"pressed": -1, "dirty": True, "stop": False, "layer": 0,
              "row_from": None, "row_to": None, "fade_t0": 0.0, "fade_s": fade_s,
-             "last_input": time.time(), "btn_p": 1.0}
+             "last_input": time.time(), "btn_p": 1.0,
+             "ind": {}, "bar_pct": 60}
 
     def initial(src):
-        if src == "screen":
-            return screen_palette(), "screen"
-        if src == "wallpaper":
-            return wallpaper_palette(wall), "wallpaper " + os.path.basename(
-                os.path.realpath(wall))
-        return theme_palette(), "theme"
+        return initial_palette(src, wall)
 
     # Seed the palette from whatever works right now, but KEEP the requested
     # source: at boot there may be no Wayland session yet for 'screen', and the
@@ -854,6 +1128,22 @@ def main():
               f"threshold {thresh} (in-memory only, nothing written to disk)")
         threading.Thread(target=watch_screen, args=(state, poll, thresh),
                          daemon=True).start()
+
+    state["ind"] = read_indicators()
+    threading.Thread(target=watch_indicators, args=(state,), daemon=True).start()
+    print("indicators: " + (", ".join(sorted(state["ind"])) or "none found"))
+
+    if bar_pct is not None:
+        try:
+            import t1hid
+            if bar_pct == "auto":
+                t1hid.set_auto(True); print("bar backlight: ALS auto")
+            else:
+                state["bar_pct"] = float(bar_pct)
+                t1hid.set_percent(state["bar_pct"])
+                print(f"bar backlight: {bar_pct}%")
+        except Exception as e:
+            print("bar backlight failed:", e)
 
     if idle_s > 0:
         print(f"idle: keys fade out after {idle_s}s quiet "
@@ -933,7 +1223,8 @@ def main():
                          or btn_fading)
             if animating or flow:
                 img = render(row, offset, state["pressed"], font,
-                             LAYERS[state.get("layer", 0)], btn)
+                             LAYERS[state.get("layer", 0)], btn,
+                             state.get("ind"))
                 if intro < 1.0:
                     img = Image.blend(black, img, intro)
                 dev.write(to_panel(img)); dev.flush()

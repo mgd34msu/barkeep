@@ -88,6 +88,7 @@ install_files() {
     install -m755 "$SRC/scripts/dfr-play.py"  "$LIBDIR/"
     install -m755 "$SRC/scripts/dispon.py"    "$LIBDIR/"
     install -m644 "$SRC/scripts/ibridge-common.sh" "$LIBDIR/"
+    install -m644 "$SRC/scripts/t1hid.py"          "$LIBDIR/"
     # systemd ExecCondition: skip the unit cleanly (not "failed") on a machine
     # that has no iBridge, e.g. a shared config or the wrong Mac.
     cat > "$LIBDIR/have-ibridge.sh" <<EOS
@@ -156,7 +157,24 @@ case "${1:-}" in
   stop)   systemctl stop   t1-touchbar-bar t1-touchbar-display ;;
   status) systemctl --no-pager status t1-touchbar-display t1-touchbar-bar ;;
   play)   shift; python3 /usr/local/lib/t1-touchbar/dfr-play.py "$@" ;;
-  *) echo "usage: t1-touchbar {start|stop|status|play <file|test|bars|flow>}" ;;
+  brightness|bright)
+          shift
+          python3 -c "
+import sys; sys.path.insert(0, '/usr/local/lib/t1-touchbar')
+import t1hid
+a = sys.argv[1] if len(sys.argv) > 1 else None
+if a is None:
+    lo, hi, auto, ok = t1hid.caps()
+    if not ok:
+        sys.exit('cannot read the panel (needs root): try sudo t1-touchbar brightness')
+    print(f'nits {lo}-{hi}, auto={auto}')
+elif a == 'auto':
+    print('auto:', t1hid.set_auto(True))
+else:
+    print(f'{a}%:', t1hid.set_percent(float(a)))
+" "$@" ;;
+  preview) shift; python3 /usr/local/lib/t1-touchbar/dfr-bar.py --preview "$@" ;;
+  *) echo "usage: t1-touchbar {start|stop|status|play <file>|brightness [0-100|auto]|preview <out.png> [--preview-layer NAME]}" ;;
 esac
 EOS
     chmod 755 /usr/local/bin/t1-touchbar
