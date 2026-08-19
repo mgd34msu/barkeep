@@ -25,4 +25,4 @@ MODULE_ALIAS("usb:v05ACp8600d*dc*dsc*dp*ic03isc01ip01in*");
 MODULE_ALIAS("usb:v05ACp8600d*dc*dsc*dp*ic0Eisc01ip00in*");
 MODULE_ALIAS("usb:v05ACp8600d*dc*dsc*dp*ic0Eisc02ip00in*");
 
-MODULE_INFO(srcversion, "D1D8DEED85F8501F3EB3D00");
+MODULE_INFO(srcversion, "395F74B0C0D716B9475984C");

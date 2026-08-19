@@ -2,6 +2,15 @@
 /*
  * dfr-probe v3 — draw to the Apple T1 iBridge Touch Bar.
  *
+ * The DFR wire protocol implemented here is derived from DFRDisplayKm, the
+ * Windows Touch Bar driver by imbushuo (MIT), vendored in this repo under
+ * reference/DFRDisplayKm. Specifically: the request/response envelope, the
+ * framebuffer update layout and its field values, the FourCC keys, the D0-entry
+ * bring-up order, and dfr_update_padding[] below, which is copied byte-for-byte
+ * from DfrUpdatePadding[] in src/DFRDisplayKm/DfrDisplay.c. MIT is compatible
+ * with the GPL-2.0 this module ships under; the original notice is retained in
+ * reference/DFRDisplayKm/LICENSE.
+ *
  * Confirmed by v2: REDY -> GINF returns width=2170 height=60 pixelFormat="ABGR".
  * v3 adds a framebuffer update after the info reply.
  *
@@ -70,6 +79,10 @@ static DEFINE_SPINLOCK(user_fb_lock);   /* draw() runs in URB completion (atomic
 
 
 /* Verbatim from DFRDisplayKm DfrDisplay.c — NOT zeros, and 88 bytes not 96 */
+/* Copied byte-for-byte from DfrUpdatePadding[] in DFRDisplayKm (imbushuo, MIT),
+ * reference/DFRDisplayKm/src/DFRDisplayKm/DfrDisplay.c. Not zeros and not 96
+ * bytes: both of those were wrong guesses that cost real time. Do not "tidy".
+ */
 static const u8 dfr_update_padding[88] = {
 	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
 	0x00,0x00,0x00,0x00,0xFE,0xFF,0x00,0x00,
