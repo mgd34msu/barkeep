@@ -19,7 +19,7 @@ Colour source:
     --threshold N     ignore palette changes smaller than this (default 18)
     --fade N          seconds to cross-fade a palette change  (default 2)
     --flow N          drift the gradient sideways, px/sec. The bar is
-                      2170px, so 60 = one full loop every 36s. 30 is
+                      2170px, so 45 = one full loop every 48s. 30 is
                       too slow to read as motion; 300 is frantic.
 
 Idle auto-hide:
