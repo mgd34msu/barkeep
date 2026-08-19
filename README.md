@@ -55,8 +55,6 @@ Units:
 
 - `t1-touchbar-display.service` — enters USB config 2 and loads the modules
 - `t1-touchbar-bar.service` — the UI (requires the display unit)
-- `t1-touchbar-resume.service` — re-establishes the session after suspend, since the
-  iBridge re-enumerates on wake
 
 Modules are DKMS, so they rebuild on kernel updates.
 
@@ -108,6 +106,12 @@ Almost always `apple-ibridge` got loaded by something — see the legacy-units n
 **The display unit is skipped, not failed.** Its `ExecCondition` found no `05ac:8600` in
 `/sys/bus/usb/devices/*`. The device is located by USB id, not by a fixed port, so this means
 the hardware genuinely is not there. `./install.sh status` prints the path it found.
+
+**The machine hangs on suspend.** Fixed — but if you see it, the cause is a USB driver that
+keeps submitting URBs into the PM transition. `dfr-probe` implements `.suspend`/`.resume`/
+`.reset_resume`: suspend sets the stop flag, waits on the URB anchor and kills what is left;
+resume redoes the whole handshake, because the panel loses its session. A log that ends at
+`PM: suspend entry (deep)` with driver traffic right before it is the signature.
 
 **"another dfr-bar is already running".** Two writers on `/dev/dfr0` fight and the bar
 flickers, so the UI takes an exclusive lock on `/run/dfr-bar.lock`. Stop the service before
@@ -332,8 +336,9 @@ Two repos cover this same machine and go further in places:
 
 ## Still to do
 
-- **suspend/resume is unverified.** `t1-touchbar-resume.service` is written and enabled but
-  has never been through a real suspend cycle.
+- **Suspend/resume is fixed but only tested via `/sys/power/pm_test`**, which exercises the
+  full device suspend/resume path without actually cutting power. A real lid-close cycle has
+  not been re-tested since the fix.
 - The stock firmware function row is unavailable while in config 2 (`apple-ibridge` must stay
   unloaded). `dfr-bar.py` replaces it with a working one, so this matters less than it did.
 - Adopting `appletbdrm` would make the bar a real DRM device rather than a character device.

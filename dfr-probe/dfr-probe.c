@@ -78,7 +78,6 @@ static DEFINE_SPINLOCK(user_fb_lock);   /* draw() runs in URB completion (atomic
 #define FB_MAX (512 * 1024)
 
 
-/* Verbatim from DFRDisplayKm DfrDisplay.c — NOT zeros, and 88 bytes not 96 */
 /* Copied byte-for-byte from DfrUpdatePadding[] in DFRDisplayKm (imbushuo, MIT),
  * reference/DFRDisplayKm/src/DFRDisplayKm/DfrDisplay.c. Not zeros and not 96
  * bytes: both of those were wrong guesses that cost real time. Do not "tidy".
@@ -107,6 +106,11 @@ struct dfr_ctx {
 	bool sent_ginf, drew, stop, inited, got_info;
 	u32 w, h, frame;
 	struct work_struct start_work;
+	/* Every outbound URB is anchored so suspend can wait for the in-flight
+	 * ones to finish. The frame loop resubmits from its own completion
+	 * handler, so without this there is no point at which the traffic is
+	 * known to have stopped. */
+	struct usb_anchor tx_anchor;
 };
 
 static void draw(struct dfr_ctx *ctx);
@@ -151,9 +155,12 @@ static int tx_raw(struct dfr_ctx *ctx, void *buf, int len, bool free_buf)
 			  buf, len, tx_done, ctx);
 	if (free_buf)
 		urb->transfer_flags |= URB_FREE_BUFFER;
+	usb_anchor_urb(urb, &ctx->tx_anchor);
 	rc = usb_submit_urb(urb, GFP_ATOMIC);
-	if (rc)
+	if (rc) {
+		usb_unanchor_urb(urb);
 		usb_free_urb(urb);
+	}
 	return rc;
 }
 
@@ -279,8 +286,9 @@ sent:
 			usb_fill_bulk_urb(u, ctx->udev,
 					  usb_sndbulkpipe(ctx->udev, ctx->ep_out),
 					  fb_buf, reqlen, tx_done, ctx);
+			usb_anchor_urb(u, &ctx->tx_anchor);
 			rc = usb_submit_urb(u, GFP_ATOMIC);
-			if (rc) { usb_free_urb(u); return; }
+			if (rc) { usb_unanchor_urb(u); usb_free_urb(u); return; }
 			u = usb_alloc_urb(0, GFP_ATOMIC);
 			if (!u)
 				return;
@@ -293,9 +301,12 @@ sent:
 					  usb_sndbulkpipe(ctx->udev, fb_ep ? fb_ep : ctx->ep_out),
 					  fb_buf, total, frame_done, ctx);
 		}
+		usb_anchor_urb(u, &ctx->tx_anchor);
 		rc = usb_submit_urb(u, GFP_ATOMIC);
-		if (rc)
+		if (rc) {
+			usb_unanchor_urb(u);
 			usb_free_urb(u);
+		}
 	}
 	if (!ctx->drew)
 		pr_info("dfr-probe: DRAW %ux%u bpp=%d order=%d px=%u pad=%u total=%u hdr=0x%08x rc=%d\n",
@@ -422,6 +433,7 @@ static int dfr_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	/* Do NOT touch the bus from probe(): usbcore is still adding interfaces and
 	 * submitting URBs here provokes "EP not empty, refuse reset" and the whole
 	 * configuration gets torn down. Defer everything to a work item. */
+	init_usb_anchor(&ctx->tx_anchor);
 	INIT_WORK(&ctx->start_work, dfr_start_work);
 	schedule_work(&ctx->start_work);
 	rc = 0;
@@ -454,6 +466,7 @@ static void dfr_disconnect(struct usb_interface *intf)
 	pr_info("dfr-probe: disconnect (drew=%d)\n", ctx->drew);
 	ctx->stop = true;
 	cancel_work_sync(&ctx->start_work);
+	usb_kill_anchored_urbs(&ctx->tx_anchor);
 	{
 		int j;
 
@@ -526,9 +539,64 @@ static const struct usb_device_id dfr_ids[] = {
 };
 MODULE_DEVICE_TABLE(usb, dfr_ids);
 
+/* System suspend. The frame loop is self-perpetuating - frame_done() queues
+ * the next frame from the completion handler - so unless it is explicitly shut
+ * down the driver keeps submitting URBs while the USB core is trying to
+ * quiesce the device. That wedges the whole suspend: the machine stops at
+ * "PM: suspend entry" and never comes back, taking the display and input
+ * devices with it. Stop the loop, then wait for what is already on the wire.
+ */
+static int dfr_suspend(struct usb_interface *intf, pm_message_t message)
+{
+	struct dfr_ctx *ctx = usb_get_intfdata(intf);
+	int j;
+
+	if (!ctx)
+		return 0;               /* stub-claimed interface, nothing running */
+
+	pr_info("dfr-probe: suspend - stopping the frame loop\n");
+	ctx->stop = true;               /* frame_done() stops resubmitting */
+	cancel_work_sync(&ctx->start_work);
+
+	if (!usb_wait_anchor_empty_timeout(&ctx->tx_anchor, 1000))
+		usb_kill_anchored_urbs(&ctx->tx_anchor);
+
+	usb_kill_urb(ctx->in_urb);
+	for (j = 0; j < 8; j++)
+		if (ctx->in_pool[j])
+			usb_kill_urb(ctx->in_pool[j]);
+	return 0;
+}
+
+/* Resume. The panel loses its display session over suspend, so redo the whole
+ * bring-up (clear halts -> GINF -> REDY -> CLDR -> first frame) rather than
+ * just resuming traffic; dfr_start_work() is exactly that sequence.
+ */
+static int dfr_resume(struct usb_interface *intf)
+{
+	struct dfr_ctx *ctx = usb_get_intfdata(intf);
+
+	if (!ctx)
+		return 0;
+
+	pr_info("dfr-probe: resume - restarting the handshake\n");
+	ctx->stop = false;
+	ctx->sent_ginf = false;
+	ctx->drew = false;
+	ctx->inited = false;
+	ctx->got_info = false;
+	ctx->frame = 0;
+	schedule_work(&ctx->start_work);
+	return 0;
+}
+
 static struct usb_driver dfr_driver = {
 	.name = "dfr-probe", .id_table = dfr_ids,
 	.probe = dfr_probe, .disconnect = dfr_disconnect,
+	.suspend = dfr_suspend,
+	.resume = dfr_resume,
+	/* device lost power / was reset: same path, it needs the full handshake */
+	.reset_resume = dfr_resume,
 };
 
 static int __init dfr_init(void)

@@ -69,6 +69,12 @@ IDLE_S     = 30.0                # quiet for this long => hide the keys
 IDLE_OUT_S = 2.0                 # fade them out over this
 IDLE_IN_S  = 1.0                 # and back in over this
 
+# The frame loop runs at 30fps, so a wall-clock gap this large between frames
+# means the process was frozen - i.e. the machine suspended. The panel enable
+# is a HID feature report the firmware can lose over a real suspend, and only
+# userspace sends it, so on waking we re-issue it and fade back in from black.
+RESUME_GAP_S = 5.0
+
 
 def ease(t):
     """smoothstep, clamped. THE easing curve - every transition on the bar uses
@@ -876,6 +882,13 @@ def main():
             row = current_row(state, fade_s)
             now = time.time()
             dt, last_frame = now - last_frame, now
+
+            if dt > RESUME_GAP_S:
+                print(f"resume: {dt:.0f}s gap - re-enabling the panel")
+                dev.write(to_panel(black)); dev.flush()
+                panel_on()
+                intro_t0 = now              # rise out of black again
+                state["last_input"] = now   # and show the keys on wake
 
             # Idle auto-hide. Ramp a phase 0..1 LINEARLY by elapsed time, then
             # ease the phase for the actual opacity. Doing it this way means an

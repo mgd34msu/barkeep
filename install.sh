@@ -9,7 +9,7 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SRC/scripts/ibridge-common.sh"
 LIBDIR=/usr/local/lib/t1-touchbar
 CFGDIR=/etc/t1-touchbar
-UNITS=(t1-touchbar-display.service t1-touchbar-bar.service t1-touchbar-resume.service)
+UNITS=(t1-touchbar-display.service t1-touchbar-bar.service)
 MODULES=(t1-ibridge-cfg t1-dfr-probe)
 VERSION=1.0
 
@@ -216,8 +216,8 @@ do_install() {
 do_uninstall() {
     need_root uninstall
     info "stopping and disabling units"
-    systemctl disable --now "${UNITS[@]}" >/dev/null 2>&1 || true
-    rm -f "${UNITS[@]/#//etc/systemd/system/}"
+    systemctl disable --now "${UNITS[@]}" t1-touchbar-resume.service >/dev/null 2>&1 || true
+    rm -f "${UNITS[@]/#//etc/systemd/system/}" /etc/systemd/system/t1-touchbar-resume.service
     systemctl daemon-reload
     for name in "${MODULES[@]}"; do
         dkms status "$name/$VERSION" >/dev/null 2>&1 && {
