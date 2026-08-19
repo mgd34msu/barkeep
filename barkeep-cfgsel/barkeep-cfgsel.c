@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * ibridge-cfg — select the USB configuration for the Apple T1 iBridge (05ac:8600)
+ * barkeep-cfgsel — select the USB configuration for the Apple T1 iBridge (05ac:8600)
  * at ENUMERATION time.
  *
  * Why this has to be a kernel module: on a composite USB device the configuration
@@ -46,7 +46,7 @@ static int ibridge_choose_configuration(struct usb_device *udev)
 
 	if (config < 1 || config > udev->descriptor.bNumConfigurations) {
 		dev_warn(&udev->dev,
-			 "ibridge-cfg: config=%d out of range (device has %d), leaving default\n",
+			 "barkeep-cfgsel: config=%d out of range (device has %d), leaving default\n",
 			 config, udev->descriptor.bNumConfigurations);
 		return -1;   /* fall back to usbcore's own choice */
 	}
@@ -55,38 +55,38 @@ static int ibridge_choose_configuration(struct usb_device *udev)
 	for (i = 0; i < udev->descriptor.bNumConfigurations; i++) {
 		if (udev->config[i].desc.bConfigurationValue == config) {
 			dev_info(&udev->dev,
-				 "ibridge-cfg: selecting configuration %d at enumeration\n",
+				 "barkeep-cfgsel: selecting configuration %d at enumeration\n",
 				 config);
 			return config;
 		}
 	}
 
 	dev_warn(&udev->dev,
-		 "ibridge-cfg: no configuration with bConfigurationValue=%d; leaving default\n",
+		 "barkeep-cfgsel: no configuration with bConfigurationValue=%d; leaving default\n",
 		 config);
 	return -1;
 }
 
-static struct usb_device_driver ibridge_cfg_driver = {
-	.name			= "ibridge-cfg",
+static struct usb_device_driver barkeep_cfgsel_driver = {
+	.name			= "barkeep-cfgsel",
 	.id_table		= ibridge_ids,
 	.choose_configuration	= ibridge_choose_configuration,
 	.generic_subclass	= 1,
 	.supports_autosuspend	= 1,
 };
 
-static int __init ibridge_cfg_init(void)
+static int __init barkeep_cfgsel_init(void)
 {
-	return usb_register_device_driver(&ibridge_cfg_driver, THIS_MODULE);
+	return usb_register_device_driver(&barkeep_cfgsel_driver, THIS_MODULE);
 }
 
-static void __exit ibridge_cfg_exit(void)
+static void __exit barkeep_cfgsel_exit(void)
 {
-	usb_deregister_device_driver(&ibridge_cfg_driver);
+	usb_deregister_device_driver(&barkeep_cfgsel_driver);
 }
 
-module_init(ibridge_cfg_init);
-module_exit(ibridge_cfg_exit);
+module_init(barkeep_cfgsel_init);
+module_exit(barkeep_cfgsel_exit);
 
 MODULE_DESCRIPTION("Select USB configuration for the Apple T1 iBridge at enumeration");
 MODULE_LICENSE("GPL");

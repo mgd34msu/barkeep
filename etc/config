@@ -1,5 +1,5 @@
-# /etc/t1-touchbar/config — options for the Touch Bar UI.
-# Edit, then: sudo systemctl restart t1-touchbar-bar
+# /etc/barkeep/config — options for the Touch Bar UI.
+# Edit, then: sudo systemctl restart barkeep-bar
 
 # --source screen    colours currently on screen (uses grim; captures your
 #                    desktop on a timer, in memory only, never written to disk)

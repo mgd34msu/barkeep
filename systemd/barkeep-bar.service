@@ -1,0 +1,15 @@
+[Unit]
+Description=Apple T1 Touch Bar UI (function row + colour tracking)
+Requires=barkeep-display.service
+After=barkeep-display.service
+ConditionPathExists=/dev/dfr0
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/barkeep/config
+ExecStart=/bin/sh -c '/usr/bin/python3 -u /usr/local/lib/barkeep/dfr-bar.py $DFR_ARGS'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

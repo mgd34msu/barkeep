@@ -147,7 +147,7 @@ def main():
     src = args[0]
 
     if not os.path.exists(DEV):
-        sys.exit(f"{DEV} missing - is dfr-probe loaded and the Touch Bar session up?")
+        sys.exit(f"{DEV} missing - is barkeep-dfr loaded and the Touch Bar session up?")
 
     with open(DEV, "wb", buffering=0) as dev:
         if src in ("test", "gradient"):

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# linux-t1-touch installer.
+# barkeep installer.
 #   sudo ./install.sh              install (DKMS modules + scripts + systemd)
 #   sudo ./install.sh uninstall    remove everything, restore the stock row
 #        ./install.sh status       what is installed / running
@@ -7,10 +7,10 @@ set -u
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SRC/scripts/ibridge-common.sh"
-LIBDIR=/usr/local/lib/t1-touchbar
-CFGDIR=/etc/t1-touchbar
-UNITS=(t1-touchbar-display.service t1-touchbar-bar.service)
-MODULES=(t1-ibridge-cfg t1-dfr-probe)
+LIBDIR=/usr/local/lib/barkeep
+CFGDIR=/etc/barkeep
+UNITS=(barkeep-display.service barkeep-bar.service)
+MODULES=(barkeep-cfgsel barkeep-dfr)
 VERSION=1.0
 
 # Units from the older "make the stock firmware function row work" setup. They
@@ -52,7 +52,7 @@ check_deps() {
 # ("already installed (unversioned module)"). Clear those first.
 clean_manual_modules() {
     local f found=0
-    for f in /lib/modules/*/extra/ibridge-cfg.ko* /lib/modules/*/extra/dfr-probe.ko*; do
+    for f in /lib/modules/*/extra/barkeep-cfgsel.ko* /lib/modules/*/extra/barkeep-dfr.ko*; do
         [ -e "$f" ] || continue
         warn "removing hand-installed $f"
         rm -f "$f"; found=1
@@ -64,7 +64,7 @@ clean_manual_modules() {
 install_dkms() {
     local name src ver
     clean_manual_modules
-    for pair in "ibridge-cfg:t1-ibridge-cfg" "dfr-probe:t1-dfr-probe"; do
+    for pair in "barkeep-cfgsel:barkeep-cfgsel" "barkeep-dfr:barkeep-dfr"; do
         src="${pair%%:*}"; name="${pair##*:}"
         dkms status "$name/$VERSION" >/dev/null 2>&1 && {
             warn "removing existing $name/$VERSION"
@@ -106,13 +106,13 @@ D=\$(ibridge_path_or_die) || exit 1
 EOS
     cat >> "$LIBDIR/dfr-up.sh" <<'EOS'
 for m in apple_ib_tb apple_ib_als apple_ibridge; do rmmod $m 2>/dev/null; done
-rmmod dfr_probe 2>/dev/null; rmmod ibridge_cfg 2>/dev/null
-modprobe ibridge_cfg config=1 || exit 1
+rmmod barkeep_dfr 2>/dev/null; rmmod barkeep_cfgsel 2>/dev/null
+modprobe barkeep_cfgsel config=1 || exit 1
 # explicit params so this never depends on module defaults
 # colr/colg/colb=0: the module fills frames from load until the UI takes over,
 # so a non-black default flashes that colour on every start.
-modprobe dfr_probe rect_w=2170 bpp=3 fbmode=1 period=1 colr=0 colg=0 colb=0 || exit 1
-echo 2 > /sys/module/ibridge_cfg/parameters/config
+modprobe barkeep_dfr rect_w=2170 bpp=3 fbmode=1 period=1 colr=0 colg=0 colb=0 || exit 1
+echo 2 > /sys/module/barkeep_cfgsel/parameters/config
 echo 0 > $D/authorized; sleep 2; echo 1 > $D/authorized; sleep 4
 cfg=$(cat $D/bConfigurationValue 2>/dev/null)
 echo "config=$cfg (want 2)"
@@ -133,8 +133,8 @@ EOS
     cat >> "$LIBDIR/dfr-reset.sh" <<'EOS'
 pkill -f dfr-bar.py 2>/dev/null
 sleep 1
-timeout 10 rmmod dfr_probe 2>/dev/null
-timeout 10 rmmod ibridge_cfg 2>/dev/null
+timeout 10 rmmod barkeep_dfr 2>/dev/null
+timeout 10 rmmod barkeep_cfgsel 2>/dev/null
 if [ "$(timeout 5 cat $D/bConfigurationValue 2>/dev/null)" != "1" ]; then
     timeout 15 sh -c "echo 1 > $D/bConfigurationValue" 2>/dev/null
     sleep 3
@@ -150,42 +150,42 @@ EOS
     [ -f "$CFGDIR/config" ] && warn "keeping existing $CFGDIR/config" \
                             || install -m644 "$SRC/etc/config" "$CFGDIR/config"
     # convenience CLI
-    cat > /usr/local/bin/t1-touchbar <<'EOS'
+    cat > /usr/local/bin/barkeep <<'EOS'
 #!/usr/bin/env bash
 case "${1:-}" in
-  start)  systemctl start  t1-touchbar-display t1-touchbar-bar ;;
-  stop)   systemctl stop   t1-touchbar-bar t1-touchbar-display ;;
-  status) systemctl --no-pager status t1-touchbar-display t1-touchbar-bar ;;
-  play)   shift; python3 /usr/local/lib/t1-touchbar/dfr-play.py "$@" ;;
+  start)  systemctl start  barkeep-display barkeep-bar ;;
+  stop)   systemctl stop   barkeep-bar barkeep-display ;;
+  status) systemctl --no-pager status barkeep-display barkeep-bar ;;
+  play)   shift; python3 /usr/local/lib/barkeep/dfr-play.py "$@" ;;
   brightness|bright)
           shift
           python3 -c "
-import sys; sys.path.insert(0, '/usr/local/lib/t1-touchbar')
+import sys; sys.path.insert(0, '/usr/local/lib/barkeep')
 import t1hid
 a = sys.argv[1] if len(sys.argv) > 1 else None
 if a is None:
     lo, hi, auto, ok = t1hid.caps()
     if not ok:
-        sys.exit('cannot read the panel (needs root): try sudo t1-touchbar brightness')
+        sys.exit('cannot read the panel (needs root): try sudo barkeep brightness')
     print(f'nits {lo}-{hi}, auto={auto}')
 elif a == 'auto':
     print('auto:', t1hid.set_auto(True))
 else:
     print(f'{a}%:', t1hid.set_percent(float(a)))
 " "$@" ;;
-  preview) shift; python3 /usr/local/lib/t1-touchbar/dfr-bar.py --preview "$@" ;;
-  *) echo "usage: t1-touchbar {start|stop|status|play <file>|brightness [0-100|auto]|preview <out.png> [--preview-layer NAME]}" ;;
+  preview) shift; python3 /usr/local/lib/barkeep/dfr-bar.py --preview "$@" ;;
+  *) echo "usage: barkeep {start|stop|status|play <file>|brightness [0-100|auto]|preview <out.png> [--preview-layer NAME]}" ;;
 esac
 EOS
-    chmod 755 /usr/local/bin/t1-touchbar
+    chmod 755 /usr/local/bin/barkeep
     # Sleep hook: tear the display session down BEFORE the kernel suspends.
-    # dfr-probe streams frames continuously to hold the session open, and a USB
+    # barkeep-dfr streams frames continuously to hold the session open, and a USB
     # driver still submitting URBs while the USB core is quiescing the device
     # wedges the suspend - the machine stops at "PM: suspend entry (deep)" and
     # never comes back. systemd waits for this hook, so by the time the kernel
     # starts suspending there is no module bound to the device at all.
     install -d /usr/lib/systemd/system-sleep
-    install -m755 "$SRC/systemd/t1-touchbar-sleep.sh" /usr/lib/systemd/system-sleep/t1-touchbar
+    install -m755 "$SRC/systemd/barkeep-sleep.sh" /usr/lib/systemd/system-sleep/barkeep
 }
 
 # Disable the legacy stock-row units and remember which ones we touched, so
@@ -232,18 +232,18 @@ do_install() {
     install_files
     install_units
     echo
-    info "installed. start now with:  sudo systemctl start t1-touchbar-display t1-touchbar-bar"
+    info "installed. start now with:  sudo systemctl start barkeep-display barkeep-bar"
     info "or just reboot - it is enabled at boot."
     warn "NOTE: in display mode apple-ibridge is unloaded, so the stock firmware"
     warn "      function row is replaced by this one. 'sudo ./install.sh uninstall' reverts."
-    echo "config: $CFGDIR/config   cli: t1-touchbar {start|stop|status|play ...}"
+    echo "config: $CFGDIR/config   cli: barkeep {start|stop|status|play ...}"
 }
 
 do_uninstall() {
     need_root uninstall
     info "stopping and disabling units"
-    systemctl disable --now "${UNITS[@]}" t1-touchbar-resume.service >/dev/null 2>&1 || true
-    rm -f "${UNITS[@]/#//etc/systemd/system/}" /etc/systemd/system/t1-touchbar-resume.service
+    systemctl disable --now "${UNITS[@]}" barkeep-resume.service >/dev/null 2>&1 || true
+    rm -f "${UNITS[@]/#//etc/systemd/system/}" /etc/systemd/system/barkeep-resume.service
     systemctl daemon-reload
     for name in "${MODULES[@]}"; do
         dkms status "$name/$VERSION" >/dev/null 2>&1 && {
@@ -256,7 +256,7 @@ do_uninstall() {
     [ -x "$LIBDIR/dfr-reset.sh" ] && "$LIBDIR/dfr-reset.sh" || true
     restore_legacy
     systemctl daemon-reload
-    rm -rf "$LIBDIR" /usr/local/bin/t1-touchbar /usr/lib/systemd/system-sleep/t1-touchbar
+    rm -rf "$LIBDIR" /usr/local/bin/barkeep /usr/lib/systemd/system-sleep/barkeep
     warn "left $CFGDIR alone (your settings); remove it by hand if you want"
     info "done - reboot for a fully clean state"
 }
@@ -268,7 +268,7 @@ do_status() {
         printf "  %-16s %s\n" "$name" "${st:-not installed}"
     done
     echo "loaded:"
-    lsmod | grep -E '^(ibridge_cfg|dfr_probe|apple_ib)' | awk '{printf "  %-16s refcount %s\n",$1,$3}' || echo "  none"
+    lsmod | grep -E '^(barkeep_cfgsel|barkeep_dfr|apple_ib)' | awk '{printf "  %-16s refcount %s\n",$1,$3}' || echo "  none"
     echo "units:"
     for u in "${UNITS[@]}"; do
         en=$(systemctl is-enabled "$u" 2>/dev/null | head -1); en=${en:--}

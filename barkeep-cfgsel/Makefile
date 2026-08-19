@@ -1,4 +1,4 @@
-obj-m += dfr-probe.o
+obj-m += barkeep-cfgsel.o
 KDIR ?= /lib/modules/$(shell uname -r)/build
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules

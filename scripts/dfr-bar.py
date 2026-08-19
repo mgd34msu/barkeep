@@ -1085,12 +1085,12 @@ def main():
     # Single-instance lock: two writers on /dev/dfr0 fight and the bar flickers
     # wildly. Held for the life of the process, released automatically on exit.
     import fcntl as _f
-    lockf = open("/run/dfr-bar.lock", "w")
+    lockf = open("/run/barkeep.lock", "w")
     try:
         _f.flock(lockf, _f.LOCK_EX | _f.LOCK_NB)
     except BlockingIOError:
         sys.exit("another dfr-bar is already running "
-                 "(sudo systemctl stop t1-touchbar-bar, or kill it first)")
+                 "(sudo systemctl stop barkeep-bar, or kill it first)")
     lockf.write(str(os.getpid())); lockf.flush()
 
     state = {"pressed": -1, "dirty": True, "stop": False, "layer": 0,

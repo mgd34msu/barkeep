@@ -2,9 +2,9 @@
 # Build both modules. Run from anywhere: bash scripts/build.sh
 set -e
 cd "$(dirname "$0")/.."
-for d in ibridge-cfg dfr-probe; do
+for d in barkeep-cfgsel barkeep-dfr; do
   echo "== $d =="
   make -C "$d" clean >/dev/null 2>&1 || true
   make -C "$d"
 done
-echo "built: $(ls ibridge-cfg/*.ko dfr-probe/*.ko)"
+echo "built: $(ls barkeep-cfgsel/*.ko barkeep-dfr/*.ko)"

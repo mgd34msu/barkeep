@@ -1,4 +1,4 @@
-# linux-t1-touch — Apple T1 Touch Bar display driver for Linux
+# barkeep — Apple T1 Touch Bar display driver for Linux
 
 Target: **MacBookPro13,2** (2016 13" Touch Bar), Apple **T1** iBridge, USB `05ac:8600`.
 Not T2. `tiny-dfr`, `appletbdrm` and `hid-appletb-*` are all T2-only and do nothing here.
@@ -18,8 +18,8 @@ and 30fps video — plus a full function row on top of it:
 
 ## Layout
 
-    ibridge-cfg/   kernel module: selects USB configuration 2 at enumeration
-    dfr-probe/     kernel module: claims the DFR display interface, speaks the protocol,
+    barkeep-cfgsel/   kernel module: selects USB configuration 2 at enumeration
+    barkeep-dfr/     kernel module: claims the DFR display interface, speaks the protocol,
                    exposes /dev/dfr0
     scripts/       dfr-bar.py    the function-row UI (icons, touch, Fn, idle fade)
                    dfr-play.py   stills, video and test patterns
@@ -32,7 +32,7 @@ and 30fps video — plus a full function row on top of it:
                    dfr-go.sh     original bring-up + red/green/blue self-test
                    dfr-bar-run.sh  run the UI from the source tree
     systemd/       display + bar units
-    etc/config     installed to /etc/t1-touchbar/config
+    etc/config     installed to /etc/barkeep/config
     install.sh     install | uninstall | status
     reference/     imbushuo/DFRDisplayKm — the working Windows driver (MIT). READ THE SOURCE.
 
@@ -49,23 +49,23 @@ the theme palette. `install.sh` checks all of this before touching anything.
     ./install.sh status
     sudo ./install.sh uninstall    # removes everything, restores the stock function row
 
-Config lives in `/etc/t1-touchbar/config`:
+Config lives in `/etc/barkeep/config`:
 
     DFR_ARGS="--source screen --flow 15 --fade 2 --poll 10 --threshold 30 --idle 30 --idle-out 2 --idle-in 1"
 
-    sudo systemctl restart t1-touchbar-bar     # after editing
+    sudo systemctl restart barkeep-bar     # after editing
 
-    t1-touchbar start | stop | status
-    t1-touchbar play <file|test|bars|flow>
-    sudo t1-touchbar brightness            # report the panel's nits range
-    sudo t1-touchbar brightness 40         # 0-100 across that range
-    sudo t1-touchbar brightness auto       # hand back to the light sensor
-    t1-touchbar preview /tmp/bar.png --preview-layer system
+    barkeep start | stop | status
+    barkeep play <file|test|bars|flow>
+    sudo barkeep brightness            # report the panel's nits range
+    sudo barkeep brightness 40         # 0-100 across that range
+    sudo barkeep brightness auto       # hand back to the light sensor
+    barkeep preview /tmp/bar.png --preview-layer system
 
 Units:
 
-- `t1-touchbar-display.service` — enters USB config 2 and loads the modules
-- `t1-touchbar-bar.service` — the UI (requires the display unit)
+- `barkeep-display.service` — enters USB config 2 and loads the modules
+- `barkeep-bar.service` — the UI (requires the display unit)
 
 Modules are DKMS, so they rebuild on kernel updates.
 
@@ -80,7 +80,7 @@ load `apple-ibridge`, which force-selects USB config 1 — see "What was hard" b
 `touchbar.service` is `After=multi-user.target`, so at boot it lands *after* the display unit
 and silently undoes it.
 
-`install.sh` disables them and records what it disabled in `/etc/t1-touchbar/legacy-disabled`;
+`install.sh` disables them and records what it disabled in `/etc/barkeep/legacy-disabled`;
 `uninstall` re-enables them. The display unit also declares `Conflicts=` on both, so starting
 one by hand cannot quietly blank the bar. `./install.sh status` warns if either is enabled.
 
@@ -100,7 +100,7 @@ one by hand cannot quietly blank the bar. `./install.sh status` warns if either 
 **The bar is black but both units say `active`.** The display session was torn down under a
 UI that is happily still rendering into it. Check the bar's log:
 
-    journalctl -u t1-touchbar-bar -b | grep -v Deprecat
+    journalctl -u barkeep-bar -b | grep -v Deprecat
 
 These three lines together are the signature:
 
@@ -112,27 +112,27 @@ Almost always `apple-ibridge` got loaded by something — see the legacy-units n
 `lsmod | grep apple_ib` should print nothing while the bar is running.
 
 **Nothing at all, `/dev/dfr0` missing.** The display unit failed to reach config 2:
-`journalctl -u t1-touchbar-display -b`. It prints `config=N (want 2)`.
+`journalctl -u barkeep-display -b`. It prints `config=N (want 2)`.
 
 **The display unit is skipped, not failed.** Its `ExecCondition` found no `05ac:8600` in
 `/sys/bus/usb/devices/*`. The device is located by USB id, not by a fixed port, so this means
 the hardware genuinely is not there. `./install.sh status` prints the path it found.
 
 **The machine hangs on suspend — UNRESOLVED, see "Still to do".** The signature is a log
-that simply ends at `PM: suspend entry (deep)` with `dfr-probe` traffic on the line before
+that simply ends at `PM: suspend entry (deep)` with `barkeep-dfr` traffic on the line before
 and nothing after; the machine needs a hard reset. Note that everything after
 `printk: Suspending console(s)` is only written to the journal *if the machine resumes*, so
 absence of later messages is not evidence about how far it got.
 
-Two mitigations are in place. `dfr-probe` implements `.suspend`/`.resume`/`.reset_resume`:
+Two mitigations are in place. `barkeep-dfr` implements `.suspend`/`.resume`/`.reset_resume`:
 suspend clears the stop flag, cancels the frame work and waits on the URB anchor before
 killing what is left; resume redoes the whole handshake, because the panel loses its session.
-On top of that, `/usr/lib/systemd/system-sleep/t1-touchbar` tears the display session down
+On top of that, `/usr/lib/systemd/system-sleep/barkeep` tears the display session down
 *before* the kernel begins suspending, so nothing is bound to the device at that point.
 Neither is confirmed to fix it.
 
 **"another dfr-bar is already running".** Two writers on `/dev/dfr0` fight and the bar
-flickers, so the UI takes an exclusive lock on `/run/dfr-bar.lock`. Stop the service before
+flickers, so the UI takes an exclusive lock on `/run/barkeep.lock`. Stop the service before
 running it by hand.
 
 ## What was hard, and why
@@ -144,7 +144,7 @@ bulk OUT `0x02` + IN `0x85`.
 **2. Configuration can only be chosen at enumeration.** Userspace `SET_CONFIGURATION`
 (sysfs or libusb) never works — Microsoft documents the same rule for `usbccgp`. Linux's
 hook is `usb_device_driver.choose_configuration` (+ `generic_subclass = 1`), which is what
-`ibridge-cfg` uses. Equivalent to macOS `kUSBPreferredConfiguration` and Windows
+`barkeep-cfgsel` uses. Equivalent to macOS `kUSBPreferredConfiguration` and Windows
 `OriginalConfigurationValue`.
 
 **3. `apple-ibridge` actively fights this.** `appleib_hid_probe()` does:
@@ -201,11 +201,11 @@ invented padding length (96, actually 88) and invented contents (zeros, actually
 Panel **2170 x 60**, **3 bytes per pixel**, byte order `r,g,b` as written (the "ABGR" name in
 the descriptor does not imply a swap). Colours can be changed live:
 
-    echo 255 | sudo tee /sys/module/dfr_probe/parameters/colr
+    echo 255 | sudo tee /sys/module/barkeep_dfr/parameters/colr
 
 ## Pushing pixels
 
-`dfr-probe` exposes **`/dev/dfr0`**. Write exactly one frame: **2170 x 60 RGB888 =
+`barkeep-dfr` exposes **`/dev/dfr0`**. Write exactly one frame: **2170 x 60 RGB888 =
 390600 bytes**. Short writes are zero-padded. The driver re-sends the current buffer
 continuously, which is also what holds the display session open.
 
@@ -374,7 +374,7 @@ is inferred from a ~120ms gap in reports. Protocol credit: `xeeban/macbook-t1-li
 ## Credits and licensing
 
 **`imbushuo/DFRDisplayKm`** (MIT) — the Windows Touch Bar driver, vendored in full under
-`reference/DFRDisplayKm` with its original LICENSE. The DFR protocol in `dfr-probe.c` is
+`reference/DFRDisplayKm` with its original LICENSE. The DFR protocol in `barkeep-dfr.c` is
 **derived from it**: the request/response envelope, the framebuffer update layout and field
 values, the FourCC keys, the bring-up order, and `dfr_update_padding[]`, which is copied
 byte-for-byte from their `DfrUpdatePadding[]`. MIT is GPL-compatible, so the kernel modules
@@ -421,7 +421,7 @@ Two repos cover this same machine and go further in places:
   because suspend is disabled on the development machine.
 
   It is also **not established that this project is the cause**. Every hang observed so far
-  had `dfr-probe` loaded, but no successful suspend has ever been recorded on this machine
+  had `barkeep-dfr` loaded, but no successful suspend has ever been recorded on this machine
   either, with or without it. The decisive test is a lid close with the package uninstalled;
   it has not been run.
 - The stock firmware function row is unavailable while in config 2 (`apple-ibridge` must stay

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * dfr-probe v3 — draw to the Apple T1 iBridge Touch Bar.
+ * barkeep-dfr v3 — draw to the Apple T1 iBridge Touch Bar.
  *
  * The DFR wire protocol implemented here is derived from DFRDisplayKm, the
  * Windows Touch Bar driver by imbushuo (MIT), vendored in this repo under
@@ -149,7 +149,7 @@ static int send_cmd(struct dfr_ctx *ctx, u32 k, const u32 *payload, int npay);
 static void tx_done(struct urb *urb)
 {
 	if (urb->status)
-		pr_warn_ratelimited("dfr-probe: TX status %d (len %d)\n",
+		pr_warn_ratelimited("barkeep-dfr: TX status %d (len %d)\n",
 				    urb->status, urb->actual_length);
 	usb_free_urb(urb);
 }
@@ -165,7 +165,7 @@ static void frame_done(struct urb *urb)
 	if (ctx)
 		ctx->frame_in_flight = false;
 	if (st) {
-		pr_warn_ratelimited("dfr-probe: frame TX status %d\n", st);
+		pr_warn_ratelimited("barkeep-dfr: frame TX status %d\n", st);
 		return;
 	}
 	if (ctx && !ctx->stop) {
@@ -219,7 +219,7 @@ static int send_cmd(struct dfr_ctx *ctx, u32 k, const u32 *payload, int npay)
 		p[8 + i] = cpu_to_le32(payload[i]);
 	rc = tx_raw(ctx, p, total, true);
 	if (verbose)
-		pr_info("dfr-probe: >>> %c%c%c%c payload=%d total=%d rc=%d\n",
+		pr_info("barkeep-dfr: >>> %c%c%c%c payload=%d total=%d rc=%d\n",
 			(k >> 24) & 0xff, (k >> 16) & 0xff, (k >> 8) & 0xff,
 			k & 0xff, npay, total, rc);
 	if (rc)
@@ -242,7 +242,7 @@ static void draw(struct dfr_ctx *ctx)
 	u32 i, rc;
 
 	if (total > FB_MAX) {
-		pr_info("dfr-probe: frame too big (%u)\n", total);
+		pr_info("barkeep-dfr: frame too big (%u)\n", total);
 		return;
 	}
 	if (fbmode == 0) {
@@ -350,7 +350,7 @@ sent:
 		}
 	}
 	if (!ctx->drew)
-		pr_info("dfr-probe: DRAW %ux%u bpp=%d order=%d px=%u pad=%u total=%u hdr=0x%08x rc=%d\n",
+		pr_info("barkeep-dfr: DRAW %ux%u bpp=%d order=%d px=%u pad=%u total=%u hdr=0x%08x rc=%d\n",
 			w, h, bpp, order, nbytes, pad, total, DFR_FB_HEADER, rc);
 	ctx->drew = true;
 }
@@ -363,7 +363,7 @@ static void in_done(struct urb *urb)
 	u32 hdr, k;
 
 	if (urb->status) {
-		pr_warn_ratelimited("dfr-probe: IN status %d\n", urb->status);
+		pr_warn_ratelimited("barkeep-dfr: IN status %d\n", urb->status);
 		return;
 	}
 	if (n < 4)
@@ -373,9 +373,9 @@ static void in_done(struct urb *urb)
 		goto again;                      /* echo */
 	if (hdr & 0x80000000u) {
 		if (verbose) {
-			pr_info("dfr-probe: <<< ACK/response hdr=0x%08x len=%d\n",
+			pr_info("barkeep-dfr: <<< ACK/response hdr=0x%08x len=%d\n",
 				hdr, n);
-			print_hex_dump(KERN_INFO, "dfr-probe: ack ",
+			print_hex_dump(KERN_INFO, "barkeep-dfr: ack ",
 				       DUMP_PREFIX_OFFSET, 16, 1, b,
 				       min(n, 64), false);
 		}
@@ -384,17 +384,17 @@ static void in_done(struct urb *urb)
 
 	k = (n >= 20) ? le32_to_cpup((__le32 *)(b + 0x10)) : 0;
 	if (verbose) {
-		pr_info("dfr-probe: <<< %d bytes key=%c%c%c%c\n", n,
+		pr_info("barkeep-dfr: <<< %d bytes key=%c%c%c%c\n", n,
 			(k >> 24) & 0xff, (k >> 16) & 0xff, (k >> 8) & 0xff,
 			k & 0xff);
-		print_hex_dump(KERN_INFO, "dfr-probe: ", DUMP_PREFIX_OFFSET,
+		print_hex_dump(KERN_INFO, "barkeep-dfr: ", DUMP_PREFIX_OFFSET,
 			       16, 1, b, min(n, 80), false);
 	}
 
 	if (k == DFR_KEY_GINF && n >= 0x28) {
 		ctx->w = le32_to_cpup((__le32 *)(b + 0x20));
 		ctx->h = le32_to_cpup((__le32 *)(b + 0x24));
-		pr_info("dfr-probe: panel %ux%u\n", ctx->w, ctx->h);
+		pr_info("barkeep-dfr: panel %ux%u\n", ctx->w, ctx->h);
 		ctx->got_info = true;
 		if (!ctx->inited) {
 			ctx->inited = true;
@@ -443,11 +443,11 @@ static void dfr_start_work(struct work_struct *w)
 	usb_fill_bulk_urb(ctx->in_urb, udev, usb_rcvbulkpipe(udev, ctx->ep_in),
 			  ctx->in_buf, DFR_RESP_LEN, in_done, ctx);
 	rc = usb_submit_urb(ctx->in_urb, GFP_KERNEL);
-	pr_info("dfr-probe: (deferred) IN armed %d, starting handshake\n", rc);
+	pr_info("barkeep-dfr: (deferred) IN armed %d, starting handshake\n", rc);
 	send_cmd(ctx, DFR_KEY_GINF, NULL, 0);
 }
 
-static int dfr_probe(struct usb_interface *intf, const struct usb_device_id *id)
+static int barkeep_dfr(struct usb_interface *intf, const struct usb_device_id *id)
 {
 	struct usb_device *udev = interface_to_usbdev(intf);
 	struct usb_host_interface *alt = intf->cur_altsetting;
@@ -461,7 +461,7 @@ static int dfr_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	 * otherwise take ~50ms to come up via usbhid -> apple-ibridge-hid, and the
 	 * T1 abandons config 2 at ~30ms with them still unclaimed. */
 	if (alt->desc.bInterfaceClass != 0x10) {
-		dev_info(&intf->dev, "dfr-probe: stub-claiming interface %d (class 0x%02x)\n",
+		dev_info(&intf->dev, "barkeep-dfr: stub-claiming interface %d (class 0x%02x)\n",
 			 alt->desc.bInterfaceNumber, alt->desc.bInterfaceClass);
 		usb_set_intfdata(intf, NULL);
 		return 0;
@@ -469,7 +469,7 @@ static int dfr_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	struct dfr_ctx *ctx;
 	int i, rc;
 
-	dev_info(&intf->dev, "dfr-probe v3: claimed DFR interface\n");
+	dev_info(&intf->dev, "barkeep-dfr v3: claimed DFR interface\n");
 	ctx = kzalloc(sizeof(*ctx), GFP_ATOMIC);
 	if (!ctx)
 		return -ENOMEM;
@@ -512,7 +512,7 @@ static int dfr_probe(struct usb_interface *intf, const struct usb_device_id *id)
 					  in_done, ctx);
 			usb_submit_urb(ctx->in_pool[j], GFP_ATOMIC);
 		}
-		dev_info(&intf->dev, "dfr-probe: %d extra IN urbs queued\n", j);
+		dev_info(&intf->dev, "barkeep-dfr: %d extra IN urbs queued\n", j);
 	}
 	send_cmd(ctx, DFR_KEY_REDY, NULL, 0);
 	return 0;
@@ -524,7 +524,7 @@ static void dfr_disconnect(struct usb_interface *intf)
 
 	if (!ctx)
 		return;                 /* stub-claimed interface */
-	pr_info("dfr-probe: disconnect (drew=%d)\n", ctx->drew);
+	pr_info("barkeep-dfr: disconnect (drew=%d)\n", ctx->drew);
 	ctx->stop = true;
 	cancel_work_sync(&ctx->start_work);
 	cancel_delayed_work_sync(&ctx->frame_work);
@@ -622,7 +622,7 @@ static int dfr_suspend(struct usb_interface *intf, pm_message_t message)
 	if (!ctx)
 		return 0;               /* stub-claimed interface, nothing running */
 
-	pr_info("dfr-probe: suspend - stopping the frame loop\n");
+	pr_info("barkeep-dfr: suspend - stopping the frame loop\n");
 	ctx->stop = true;               /* frame_done() stops resubmitting */
 	cancel_work_sync(&ctx->start_work);
 	cancel_delayed_work_sync(&ctx->frame_work);
@@ -648,7 +648,7 @@ static int dfr_resume(struct usb_interface *intf)
 	if (!ctx)
 		return 0;
 
-	pr_info("dfr-probe: resume - restarting the handshake\n");
+	pr_info("barkeep-dfr: resume - restarting the handshake\n");
 	ctx->stop = false;
 	ctx->frame_in_flight = false;
 	ctx->sent_ginf = false;
@@ -661,8 +661,8 @@ static int dfr_resume(struct usb_interface *intf)
 }
 
 static struct usb_driver dfr_driver = {
-	.name = "dfr-probe", .id_table = dfr_ids,
-	.probe = dfr_probe, .disconnect = dfr_disconnect,
+	.name = "barkeep-dfr", .id_table = dfr_ids,
+	.probe = barkeep_dfr, .disconnect = dfr_disconnect,
 	.suspend = dfr_suspend,
 	.resume = dfr_resume,
 	/* device lost power / was reset: same path, it needs the full handshake */
@@ -680,7 +680,7 @@ static int __init dfr_init(void)
 		return -ENOMEM;
 	}
 	misc_register(&dfr_misc);
-	pr_info("dfr-probe: /dev/dfr0 ready (%dx%d, %d bpp, %d bytes/frame)\n",
+	pr_info("barkeep-dfr: /dev/dfr0 ready (%dx%d, %d bpp, %d bytes/frame)\n",
 		PANEL_W, PANEL_H, PANEL_BPP, PANEL_FB_BYTES);
 	return usb_register(&dfr_driver);
 }

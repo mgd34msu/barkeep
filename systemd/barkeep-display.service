@@ -18,9 +18,9 @@ After=touchbar.service touchbar-resume.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecCondition=/usr/local/lib/t1-touchbar/have-ibridge.sh
-ExecStart=/usr/local/lib/t1-touchbar/dfr-up.sh
-ExecStop=/usr/local/lib/t1-touchbar/dfr-reset.sh
+ExecCondition=/usr/local/lib/barkeep/have-ibridge.sh
+ExecStart=/usr/local/lib/barkeep/dfr-up.sh
+ExecStop=/usr/local/lib/barkeep/dfr-reset.sh
 TimeoutStartSec=90
 # dfr-reset.sh re-enumerates USB and can take a while; without this the
 # default 90s/5s stop timeout kills it half-done and leaves the panel dark.
