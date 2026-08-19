@@ -26,7 +26,7 @@ and 30fps video — plus a full function row on top of it:
                    build.sh      build both modules out of tree
                    dfr-go.sh     original bring-up + red/green/blue self-test
                    dfr-bar-run.sh  run the UI from the source tree
-    systemd/       display / bar / resume units
+    systemd/       display + bar units
     etc/config     installed to /etc/t1-touchbar/config
     install.sh     install | uninstall | status
     reference/     imbushuo/DFRDisplayKm — the working Windows driver (MIT). READ THE SOURCE.
