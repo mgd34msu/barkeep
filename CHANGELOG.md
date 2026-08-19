@@ -3,9 +3,13 @@
 ## v0.1.0 — 2026-08-18
 
 First release. The Apple **T1** Touch Bar works as a real display under Linux —
-arbitrary images, 30fps video, and a usable function row on top of it. No other
-project drives the T1 panel: `tiny-dfr`, `appletbdrm` and `hid-appletb-*` are
-all T2-only.
+arbitrary images, 30fps video, and a usable function row on top of it.
+
+Other projects also drive the T1 panel: `sunplex07/appletbdrm` (a DRM driver
+covering both T1 and T2) and the kernel driver in `xeeban/macbook-t1-linux`.
+This is a separate implementation, with a character device rather than a DRM
+card and a userspace UI on top. `tiny-dfr` and `hid-appletb-*` are
+T2/Apple-Silicon only and do not work here.
 
 ### Display
 

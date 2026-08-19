@@ -1,7 +1,11 @@
 # barkeep — Apple T1 Touch Bar display driver for Linux
 
 Target: **MacBookPro13,2** (2016 13" Touch Bar), Apple **T1** iBridge, USB `05ac:8600`.
-Not T2. `tiny-dfr`, `appletbdrm` and `hid-appletb-*` are all T2-only and do nothing here.
+
+`tiny-dfr` and `hid-appletb-*` are T2/Apple-Silicon only and do nothing on a T1.
+**`sunplex07/appletbdrm` does support the T1** — it binds `05ac:8600` and exposes the bar as
+a DRM device — as does the kernel driver in `xeeban/macbook-t1-linux`. This project is a
+separate implementation with a userspace UI on top; see Credits.
 
 Status: **working, and it survives a reboot.** The bar is a real display — arbitrary images
 and 30fps video — plus a full function row on top of it:
