@@ -8,8 +8,12 @@ and 30fps video — plus a full function row on top of it:
 
 - drawn icons over a gradient sampled from what is on screen (or the wallpaper, or the theme)
 - **buttons that work** — touch is read from the digitizer and injected as real keys
-- **hold Fn** for F1–F12, release to return to the media strip
+- **five layers**, selected by Fn plus a modifier — media, F1–F12, a live system
+  row, F13–F24 and a transport strip
+- **live readouts** — battery, wifi, bluetooth and keyboard backlight, straight from `/sys`
+- **Touch Bar backlight control**, including handing it back to the ambient light sensor
 - **keys fade away after 30s idle**, leaving just the gradient, and fade back on any input
+- **offline preview** — render any layer to a PNG with no hardware and no root
 - DKMS modules + systemd units, so it comes up on every boot
 
 ## Layout
@@ -20,6 +24,7 @@ and 30fps video — plus a full function row on top of it:
     scripts/       dfr-bar.py    the function-row UI (icons, touch, Fn, idle fade)
                    dfr-play.py   stills, video and test patterns
                    ibridge-common.sh  locates the iBridge in sysfs by USB id
+                   t1hid.py      Touch Bar backlight over HID (interface 6)
                    dfr-up.sh     bring the display session up
                    dfr-reset.sh  put the stock firmware row back, no reboot
                    dispon.py     panel enable on its own
@@ -46,10 +51,16 @@ the theme palette. `install.sh` checks all of this before touching anything.
 
 Config lives in `/etc/t1-touchbar/config`:
 
-    DFR_ARGS="--source screen --flow 30 --fade 2 --poll 3 --threshold 18 --idle 30 --idle-out 2 --idle-in 1"
+    DFR_ARGS="--source screen --flow 15 --fade 2 --poll 10 --threshold 30 --idle 30 --idle-out 2 --idle-in 1"
 
     sudo systemctl restart t1-touchbar-bar     # after editing
-    t1-touchbar {start|stop|status|play <file|test|bars|flow>}
+
+    t1-touchbar start | stop | status
+    t1-touchbar play <file|test|bars|flow>
+    sudo t1-touchbar brightness            # report the panel's nits range
+    sudo t1-touchbar brightness 40         # 0-100 across that range
+    sudo t1-touchbar brightness auto       # hand back to the light sensor
+    t1-touchbar preview /tmp/bar.png --preview-layer system
 
 Units:
 
@@ -107,11 +118,18 @@ Almost always `apple-ibridge` got loaded by something — see the legacy-units n
 `/sys/bus/usb/devices/*`. The device is located by USB id, not by a fixed port, so this means
 the hardware genuinely is not there. `./install.sh status` prints the path it found.
 
-**The machine hangs on suspend.** Fixed — but if you see it, the cause is a USB driver that
-keeps submitting URBs into the PM transition. `dfr-probe` implements `.suspend`/`.resume`/
-`.reset_resume`: suspend sets the stop flag, waits on the URB anchor and kills what is left;
-resume redoes the whole handshake, because the panel loses its session. A log that ends at
-`PM: suspend entry (deep)` with driver traffic right before it is the signature.
+**The machine hangs on suspend — UNRESOLVED, see "Still to do".** The signature is a log
+that simply ends at `PM: suspend entry (deep)` with `dfr-probe` traffic on the line before
+and nothing after; the machine needs a hard reset. Note that everything after
+`printk: Suspending console(s)` is only written to the journal *if the machine resumes*, so
+absence of later messages is not evidence about how far it got.
+
+Two mitigations are in place. `dfr-probe` implements `.suspend`/`.resume`/`.reset_resume`:
+suspend clears the stop flag, cancels the frame work and waits on the URB anchor before
+killing what is left; resume redoes the whole handshake, because the panel loses its session.
+On top of that, `/usr/lib/systemd/system-sleep/t1-touchbar` tears the display session down
+*before* the kernel begins suspending, so nothing is bound to the device at that point.
+Neither is confirmed to fix it.
 
 **"another dfr-bar is already running".** Two writers on `/dev/dfr0` fight and the bar
 flickers, so the UI takes an exclusive lock on `/run/dfr-bar.lock`. Stop the service before
@@ -274,14 +292,65 @@ opacity with no jump.
 blends the two. One C-speed composite, and the plates, outlines and glyphs fade together as a
 single layer.
 
-### Fn layer
+### Layers
 
-Hold Fn and the bar switches to F1–F12 and injects those keycodes; release and it returns to
-the media strip. The keyboard node is found by capability (it reports `KEY_FN`), not by a
-fixed `/dev/input/eventN` — the number moves between boots. The Apple SPI keyboard
+Fn selects a layer together with whatever modifier is held:
+
+| Hold | Layer | Contents |
+|---|---|---|
+| — | media | esc, brightness, mission control, launchpad, kbd illum, transport, volume |
+| **Fn** | fn | Esc + F1–F12 |
+| **Ctrl+Fn** | system | live battery / wifi / bluetooth / kbd-backlight, plus bar brightness |
+| **Alt+Fn** | f13-f24 | F13–F24, unbound by default — bind them in your compositor |
+| **Meta+Fn** | transport | prev / play / next / mute / volume, larger targets |
+
+The keyboard node is found by capability (it reports `KEY_FN`), not by a fixed
+`/dev/input/eventN` — the number moves between boots. The Apple SPI keyboard
 **autorepeats Fn while held** (value 2), so treat 1 and 2 as down and 0 as up. If the layer
 flips while a finger is down, the old layer's key is released first so it cannot stick.
 Reading the keyboard needs no root if you are in the `input` group.
+
+### Live indicators and command keys
+
+A key may carry an indicator, whose label is recomputed every 2.5s, or a command, which it
+runs instead of injecting a keycode. Everything comes from `/sys` — no daemon, no polling of
+anything heavier:
+
+| Indicator | Source |
+|---|---|
+| battery | `/sys/class/power_supply/BAT*/{capacity,status}` |
+| wifi | `operstate` of the interface that has a `wireless/` directory |
+| bluetooth | `/sys/class/rfkill/*` where `type` is `bluetooth` |
+| kbd backlight | `/sys/class/leds/*kbd_backlight*/{brightness,max_brightness}` |
+
+Commands run in the **desktop user's** session via `setpriv`, never as root. Machines without
+a battery or an rfkill node simply render a plain icon. Edit `KEYS_SYS` in `dfr-bar.py` to
+change what the row contains.
+
+### Touch Bar backlight
+
+The panel's own backlight is separate from the screen's, and is driven by HID feature reports
+on **USB interface 6** — the protocol comes from `appletbdrm`:
+
+| Report | Length | Meaning |
+|---|---|---|
+| 5 | 116 | AutoBrightness (`byte[3]`: 1 = manual, 2 = ALS) + MinNits/MaxNits at `[4:8]`/`[8:12]` |
+| 4 | 14 | absolute nits, u32 LE at `byte[2:6]`, with `byte[1] = 2` |
+| 3 | 15 | display state, 1 = off, 2 = on |
+
+**AutoBrightness must be cleared before manual brightness does anything.** This panel reports
+a range of **11899–357099** and ships ALS-driven. Reading the reports needs root; without it
+`t1hid.caps()` returns `ok=False` rather than handing back firmware defaults that are not
+this panel's real range.
+
+### Offline preview
+
+    python3 scripts/dfr-bar.py --preview /tmp/bar.png --preview-layer system
+
+Renders one frame of any layer to an image with no `/dev/dfr0`, no root and no panel. Layers
+can be named (`media`, `fn`, `system`, `f13-f24`, `transport`) or given by index. This is the
+fastest way to iterate on layout and icons, and it works on a machine with no Touch Bar
+at all.
 
 Note that most F-keys do nothing at the desktop level until an app has focus — that is
 correct behaviour, not a broken injection. To check the keys really work, watch the uinput
@@ -311,11 +380,20 @@ values, the FourCC keys, the bring-up order, and `dfr_update_padding[]`, which i
 byte-for-byte from their `DfrUpdatePadding[]`. MIT is GPL-compatible, so the kernel modules
 ship as GPL-2.0 with the MIT notice retained. Without this driver none of this would exist.
 
-**`xeeban/macbook-t1-linux`** — no code taken, but the touch digitizer protocol came from
-reading it: interface 2 / EP 0x83, reports whose first 4 bytes are a little-endian float32 X
-in [0.5, 1.0]. They also independently found the same `apple-ibridge` config-1 root cause.
+**`xeeban/macbook-t1-linux`** (GPL-2.0) — no code taken, but the touch digitizer protocol came
+from reading it: interface 2 / EP 0x83, reports whose first 4 bytes are a little-endian
+float32 X in [0.5, 1.0]. The live system indicators, keys that run a command instead of
+injecting a keycode, and modifier-selected layers are all ideas from their `dfrd`,
+reimplemented here. They also independently found the same `apple-ibridge` config-1 root
+cause.
 
-**`sunplex07/appletbdrm`** — nothing used here; listed below as prior art worth adopting.
+**`sunplex07/appletbdrm`** (GPL-2.0) — Copyright (c) 2023-2026 Kerem Karabay
+<kekrby@gmail.com>, Copyright (c) 2025-2026 sunplex07. The **Touch Bar backlight protocol**
+in `scripts/t1hid.py` is derived from it: the HID feature reports on interface 6, the
+MinNits/MaxNits capability block, and the requirement that AutoBrightness be cleared before
+manual control takes effect. Ours is an independent Python implementation against hidraw
+rather than a copy of their in-kernel C, but the report layout is theirs. GPL-2.0 either
+way, so the terms are unchanged.
 
 This project is **GPL-2.0** (see `LICENSE`) — the kernel modules are already marked as such
 via SPDX and `MODULE_LICENSE("GPL")`, and `scripts/` follows for consistency. MIT is
@@ -336,9 +414,16 @@ Two repos cover this same machine and go further in places:
 
 ## Still to do
 
-- **Suspend/resume is fixed but only tested via `/sys/power/pm_test`**, which exercises the
-  full device suspend/resume path without actually cutting power. A real lid-close cycle has
-  not been re-tested since the fix.
+- **Suspend is unresolved.** A lid close hangs the machine hard — display and touchpad do
+  not come back. Adding the PM callbacks made `/sys/power/pm_test=devices` pass cleanly, but
+  a subsequent *real* suspend hung anyway, so the callbacks were necessary and not
+  sufficient. The systemd sleep hook was added afterwards and has never been exercised,
+  because suspend is disabled on the development machine.
+
+  It is also **not established that this project is the cause**. Every hang observed so far
+  had `dfr-probe` loaded, but no successful suspend has ever been recorded on this machine
+  either, with or without it. The decisive test is a lid close with the package uninstalled;
+  it has not been run.
 - The stock firmware function row is unavailable while in config 2 (`apple-ibridge` must stay
   unloaded). `dfr-bar.py` replaces it with a working one, so this matters less than it did.
 - Adopting `appletbdrm` would make the bar a real DRM device rather than a character device.

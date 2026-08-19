@@ -2,8 +2,13 @@
 
 The bar's backlight is driven by HID feature reports on **USB interface 6**
 (usage page 0xFF12), reachable from userspace through hidraw once apple-ibridge
-is out of the way. Protocol credit: sunplex07/appletbdrm, which implements the
-same reports in-kernel for both T1 and T2.
+is out of the way.
+
+The protocol below is derived from sunplex07/appletbdrm (GPL-2.0),
+Copyright (c) 2023-2026 Kerem Karabay <kekrby@gmail.com> and
+Copyright (c) 2025-2026 sunplex07, which implements the same reports in-kernel
+for both T1 and T2. This is an independent Python implementation against
+hidraw, not a copy of their C, but the report layout is theirs.
 
     report 5 (116 bytes)  AutoBrightness + capability block
                           byte[3]    1 = manual, 2 = ALS-driven

@@ -29,9 +29,25 @@ DfrUpdatePadding[] in src/DFRDisplayKm/DfrDisplay.c. The MIT License permits
 this and is compatible with the GPL; the required notice is preserved above and
 in reference/DFRDisplayKm/LICENSE.
 
+The Touch Bar backlight protocol in scripts/t1hid.py is DERIVED from
+sunplex07/appletbdrm (GPL-2.0):
+
+    Copyright (c) 2023-2026 Kerem Karabay <kekrby@gmail.com>
+    Copyright (c) 2025-2026 sunplex07
+
+Specifically the HID feature reports on USB interface 6 - report 5 carrying the
+AutoBrightness flag and the MinNits/MaxNits capability block, report 4 setting
+absolute nits, report 3 the display state - and the requirement that
+AutoBrightness be cleared before manual brightness takes effect. The
+implementation here is an independent one in Python against hidraw rather than
+a copy of their in-kernel C, but the protocol knowledge is theirs. GPL-2.0 to
+GPL-2.0, so the terms are unchanged.
+
 The touch digitizer protocol (interface 2 / endpoint 0x83, reports whose first
 four bytes are a little-endian float32 X coordinate) was learned from
-xeeban/macbook-t1-linux. No code was copied from it.
+xeeban/macbook-t1-linux (GPL-2.0), as were the design ideas behind the live
+system indicators, command-running keys and modifier-selected layers. No code
+was copied from it.
 
 ================================================================================
 
