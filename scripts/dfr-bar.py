@@ -915,14 +915,24 @@ def main():
                 else:
                     intro_t0 = None
 
-            if state["dirty"] or state["fading"] or flow or intro < 1.0 or btn_fading:
+            # Only draw when something is actually changing. `flow` used to be
+            # in this condition directly, so with the default --flow 30 it was
+            # permanently true and we rendered and pushed a full 390,600-byte
+            # frame every tick forever - which is where this process's CPU went.
+            # The gradient drift is also paused once the keys have faded out:
+            # nobody is watching a bar they have not touched in 30s, and a
+            # static bar costs nothing to hold, since the driver keeps
+            # re-sending the last frame on its own.
+            drifting = bool(flow) and btn > 0.002
+            if (state["dirty"] or state["fading"] or intro < 1.0
+                    or btn_fading or drifting):
                 img = render(row, offset, state["pressed"], font,
                              LAYERS[state.get("layer", 0)], btn)
                 if intro < 1.0:
                     img = Image.blend(black, img, intro)
                 dev.write(to_panel(img)); dev.flush()
                 state["dirty"] = False
-            if flow:
+            if drifting:
                 offset = (offset + max(1, int(flow / 30))) % W
             time.sleep(period)
     except KeyboardInterrupt:

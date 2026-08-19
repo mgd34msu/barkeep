@@ -71,10 +71,25 @@ static int extra = 0;    module_param(extra, int, 0644);   /* 1 = send SORI/KBMC
  * in hours and rotates away all other history. Only turn this on to debug the
  * protocol, and turn it off again. */
 static int verbose = 0;  module_param(verbose, int, 0644);
+/* How often to re-send the framebuffer when NOTHING has changed, in ms. The
+ * panel needs to keep seeing traffic or the display session drops, but it does
+ * not need it as fast as the bus will go. frame_done() used to resubmit the
+ * next frame the instant the previous one completed, with no delay anywhere:
+ * that is a saturating loop pushing 390,600 bytes per frame at bus speed
+ * (~35 MB/s) forever, even on a completely static image. A write to /dev/dfr0
+ * still goes out immediately, so animation is unaffected - this only paces the
+ * idle keepalive. Lower it if the session drops; raise it to save power. */
+static int keepalive_ms = 100;  module_param(keepalive_ms, int, 0644);
 
 static void *fb_buf;             /* preallocated at module load */
 static u8 *user_fb;              /* pixels pushed from /dev/dfr0 */
 static bool user_fb_valid;
+static bool fb_dirty;            /* userspace wrote a new frame - send it now */
+/* The DFR interface that owns the frame loop, so a write to /dev/dfr0 (a misc
+ * device with no link to the USB interface) can kick it. Set in probe, cleared
+ * in disconnect. */
+struct dfr_ctx;
+static struct dfr_ctx *active_ctx;
 static DEFINE_SPINLOCK(user_fb_lock);   /* draw() runs in URB completion (atomic) - MUST NOT be a mutex */
 #define PANEL_W 2170
 #define PANEL_H 60
@@ -111,6 +126,10 @@ struct dfr_ctx {
 	bool sent_ginf, drew, stop, inited, got_info;
 	u32 w, h, frame;
 	struct work_struct start_work;
+	/* Paces the frame loop. Also gives suspend something it can cancel
+	 * synchronously, which an unbounded resubmit-from-completion chain
+	 * never offered. */
+	struct delayed_work frame_work;
 	/* Every outbound URB is anchored so suspend can wait for the in-flight
 	 * ones to finish. The frame loop resubmits from its own completion
 	 * handler, so without this there is no point at which the traffic is
@@ -144,8 +163,13 @@ static void frame_done(struct urb *urb)
 	if (ctx && !ctx->stop) {
 		/* commit the frame: UDCL acknowledgement (uses its own header) */
 		send_cmd(ctx, DFR_KEY_UDCL, NULL, 0);
+		/* Queue the next one instead of submitting it here. A new frame
+		 * from userspace goes out immediately; otherwise we only tick
+		 * at the keepalive rate. */
 		if (period)
-			draw(ctx);
+			queue_delayed_work(system_wq, &ctx->frame_work,
+					   fb_dirty ? 0
+						    : msecs_to_jiffies(keepalive_ms));
 	}
 }
 
@@ -384,6 +408,17 @@ again:
 	usb_submit_urb(urb, GFP_ATOMIC);
 }
 
+static void dfr_frame_work(struct work_struct *w)
+{
+	struct dfr_ctx *ctx = container_of(to_delayed_work(w),
+					   struct dfr_ctx, frame_work);
+
+	if (ctx->stop)
+		return;
+	fb_dirty = false;
+	draw(ctx);
+}
+
 static void dfr_start_work(struct work_struct *w)
 {
 	struct dfr_ctx *ctx = container_of(w, struct dfr_ctx, start_work);
@@ -444,10 +479,12 @@ static int dfr_probe(struct usb_interface *intf, const struct usb_device_id *id)
 		return -ENODEV;
 	}
 	usb_set_intfdata(intf, ctx);
+	active_ctx = ctx;
 	/* Do NOT touch the bus from probe(): usbcore is still adding interfaces and
 	 * submitting URBs here provokes "EP not empty, refuse reset" and the whole
 	 * configuration gets torn down. Defer everything to a work item. */
 	init_usb_anchor(&ctx->tx_anchor);
+	INIT_DELAYED_WORK(&ctx->frame_work, dfr_frame_work);
 	INIT_WORK(&ctx->start_work, dfr_start_work);
 	schedule_work(&ctx->start_work);
 	rc = 0;
@@ -480,6 +517,7 @@ static void dfr_disconnect(struct usb_interface *intf)
 	pr_info("dfr-probe: disconnect (drew=%d)\n", ctx->drew);
 	ctx->stop = true;
 	cancel_work_sync(&ctx->start_work);
+	cancel_delayed_work_sync(&ctx->frame_work);
 	usb_kill_anchored_urbs(&ctx->tx_anchor);
 	{
 		int j;
@@ -495,6 +533,8 @@ static void dfr_disconnect(struct usb_interface *intf)
 	usb_kill_urb(ctx->in_urb);
 	usb_free_urb(ctx->in_urb);
 	kfree(ctx->in_buf);
+	if (active_ctx == ctx)
+		active_ctx = NULL;
 	kfree(ctx);
 	usb_set_intfdata(intf, NULL);
 }
@@ -524,6 +564,10 @@ static ssize_t dfr_dev_write(struct file *f, const char __user *ubuf,
 		user_fb_valid = true;
 		spin_unlock_irqrestore(&user_fb_lock, flags);
 		kfree(staging);
+		/* Send this frame now rather than waiting out the keepalive. */
+		fb_dirty = true;
+		if (active_ctx && !active_ctx->stop)
+			mod_delayed_work(system_wq, &active_ctx->frame_work, 0);
 	}
 	return len;
 }
@@ -571,6 +615,7 @@ static int dfr_suspend(struct usb_interface *intf, pm_message_t message)
 	pr_info("dfr-probe: suspend - stopping the frame loop\n");
 	ctx->stop = true;               /* frame_done() stops resubmitting */
 	cancel_work_sync(&ctx->start_work);
+	cancel_delayed_work_sync(&ctx->frame_work);
 
 	if (!usb_wait_anchor_empty_timeout(&ctx->tx_anchor, 1000))
 		usb_kill_anchored_urbs(&ctx->tx_anchor);
