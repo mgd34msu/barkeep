@@ -11,7 +11,7 @@ LIBDIR=/usr/local/lib/barkeep
 CFGDIR=/etc/barkeep
 UNITS=(barkeep-display.service barkeep-bar.service)
 MODULES=(barkeep-cfgsel barkeep-dfr)
-VERSION=1.0
+VERSION=0.1.0
 
 # Units from the older "make the stock firmware function row work" setup. They
 # run /usr/local/bin/touchbar-rebind, which loads apple-ibridge, whose
