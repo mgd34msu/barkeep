@@ -66,6 +66,11 @@ static int fb_ep = 0;    module_param(fb_ep, int, 0644);   /* 0 = use if2.3 OUT 
 static int fbmode = 1;   module_param(fbmode, int, 0644);
 static int split = 0;    module_param(split, int, 0644);   /* 1 = geometry pkt, then pixels as a 2nd transfer */
 static int extra = 0;    module_param(extra, int, 0644);   /* 1 = send SORI/KBMC/KBMD/SBTN/RUSO after GINF */
+/* Per-packet tracing. OFF by default: the frame loop runs at ~30fps forever, so
+ * logging every request/response with hex dumps writes GIGABYTES to the journal
+ * in hours and rotates away all other history. Only turn this on to debug the
+ * protocol, and turn it off again. */
+static int verbose = 0;  module_param(verbose, int, 0644);
 
 static void *fb_buf;             /* preallocated at module load */
 static u8 *user_fb;              /* pixels pushed from /dev/dfr0 */
@@ -119,7 +124,8 @@ static int send_cmd(struct dfr_ctx *ctx, u32 k, const u32 *payload, int npay);
 static void tx_done(struct urb *urb)
 {
 	if (urb->status)
-		pr_info("dfr-probe: TX status %d (len %d)\n", urb->status, urb->actual_length);
+		pr_warn_ratelimited("dfr-probe: TX status %d (len %d)\n",
+				    urb->status, urb->actual_length);
 	usb_free_urb(urb);
 }
 
@@ -132,7 +138,7 @@ static void frame_done(struct urb *urb)
 
 	usb_free_urb(urb);
 	if (st) {
-		pr_info("dfr-probe: frame TX status %d\n", st);
+		pr_warn_ratelimited("dfr-probe: frame TX status %d\n", st);
 		return;
 	}
 	if (ctx && !ctx->stop) {
@@ -180,9 +186,10 @@ static int send_cmd(struct dfr_ctx *ctx, u32 k, const u32 *payload, int npay)
 	for (i = 0; i < npay; i++)
 		p[8 + i] = cpu_to_le32(payload[i]);
 	rc = tx_raw(ctx, p, total, true);
-	pr_info("dfr-probe: >>> %c%c%c%c payload=%d total=%d rc=%d\n",
-		(k >> 24) & 0xff, (k >> 16) & 0xff, (k >> 8) & 0xff, k & 0xff,
-		npay, total, rc);
+	if (verbose)
+		pr_info("dfr-probe: >>> %c%c%c%c payload=%d total=%d rc=%d\n",
+			(k >> 24) & 0xff, (k >> 16) & 0xff, (k >> 8) & 0xff,
+			k & 0xff, npay, total, rc);
 	if (rc)
 		kfree(p);
 	return rc;
@@ -322,7 +329,7 @@ static void in_done(struct urb *urb)
 	u32 hdr, k;
 
 	if (urb->status) {
-		pr_info("dfr-probe: IN status %d\n", urb->status);
+		pr_warn_ratelimited("dfr-probe: IN status %d\n", urb->status);
 		return;
 	}
 	if (n < 4)
@@ -331,17 +338,24 @@ static void in_done(struct urb *urb)
 	if (hdr == DFR_REQ_HEADER)
 		goto again;                      /* echo */
 	if (hdr & 0x80000000u) {
-		pr_info("dfr-probe: <<< ACK/response hdr=0x%08x len=%d\n", hdr, n);
-		print_hex_dump(KERN_INFO, "dfr-probe: ack ", DUMP_PREFIX_OFFSET,
-			       16, 1, b, min(n, 64), false);
+		if (verbose) {
+			pr_info("dfr-probe: <<< ACK/response hdr=0x%08x len=%d\n",
+				hdr, n);
+			print_hex_dump(KERN_INFO, "dfr-probe: ack ",
+				       DUMP_PREFIX_OFFSET, 16, 1, b,
+				       min(n, 64), false);
+		}
 		goto again;
 	}
 
 	k = (n >= 20) ? le32_to_cpup((__le32 *)(b + 0x10)) : 0;
-	pr_info("dfr-probe: <<< %d bytes key=%c%c%c%c\n", n,
-		(k >> 24) & 0xff, (k >> 16) & 0xff, (k >> 8) & 0xff, k & 0xff);
-	print_hex_dump(KERN_INFO, "dfr-probe: ", DUMP_PREFIX_OFFSET, 16, 1,
-		       b, min(n, 80), false);
+	if (verbose) {
+		pr_info("dfr-probe: <<< %d bytes key=%c%c%c%c\n", n,
+			(k >> 24) & 0xff, (k >> 16) & 0xff, (k >> 8) & 0xff,
+			k & 0xff);
+		print_hex_dump(KERN_INFO, "dfr-probe: ", DUMP_PREFIX_OFFSET,
+			       16, 1, b, min(n, 80), false);
+	}
 
 	if (k == DFR_KEY_GINF && n >= 0x28) {
 		ctx->w = le32_to_cpup((__le32 *)(b + 0x20));

@@ -160,6 +160,14 @@ case "${1:-}" in
 esac
 EOS
     chmod 755 /usr/local/bin/t1-touchbar
+    # Sleep hook: tear the display session down BEFORE the kernel suspends.
+    # dfr-probe streams frames continuously to hold the session open, and a USB
+    # driver still submitting URBs while the USB core is quiescing the device
+    # wedges the suspend - the machine stops at "PM: suspend entry (deep)" and
+    # never comes back. systemd waits for this hook, so by the time the kernel
+    # starts suspending there is no module bound to the device at all.
+    install -d /usr/lib/systemd/system-sleep
+    install -m755 "$SRC/systemd/t1-touchbar-sleep.sh" /usr/lib/systemd/system-sleep/t1-touchbar
 }
 
 # Disable the legacy stock-row units and remember which ones we touched, so
@@ -230,7 +238,7 @@ do_uninstall() {
     [ -x "$LIBDIR/dfr-reset.sh" ] && "$LIBDIR/dfr-reset.sh" || true
     restore_legacy
     systemctl daemon-reload
-    rm -rf "$LIBDIR" /usr/local/bin/t1-touchbar
+    rm -rf "$LIBDIR" /usr/local/bin/t1-touchbar /usr/lib/systemd/system-sleep/t1-touchbar
     warn "left $CFGDIR alone (your settings); remove it by hand if you want"
     info "done - reboot for a fully clean state"
 }
